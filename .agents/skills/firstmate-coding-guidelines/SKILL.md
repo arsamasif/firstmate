@@ -72,6 +72,8 @@ Briefs for tasks that touch firstmate's own tracked material should tell the cre
 `bin/fm-brief.sh`'s `REPO` argument is a caller-supplied string with no reliable signal that it names firstmate's own repo, unlike a project registered in `data/projects.md`, so there is no clean point inside the scaffold to detect this case automatically.
 Firstmate adds this skill's load instruction to firstmate-repo briefs by hand instead.
 `CONTRIBUTING.md`'s "Development" section carries the same instruction as a durable reminder.
+A SKILL.md front-matter description states only its load trigger, while the body owns the operating contract.
+The combined name+description listing every session carries must stay within the per-session budget past which entries truncate - re-measure it when adding a skill.
 
 ## Compatibility and enforcement
 
