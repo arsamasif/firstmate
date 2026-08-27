@@ -1,0 +1,71 @@
+(1) front matter: 20 skills at target all parse (yaml.safe_load) with non-empty name+description
+    base skills=20 target skills=20
+
+(3) combined name+description listing size
+    before: 8891 chars / ~2222 est. tokens (chars/4)
+    after:  5507 chars / ~1376 est. tokens (chars/4)
+    delta:  -38%
+
+    per-skill chars (before -> after):
+      afk                                532 ->   306
+      ahoy                               215 ->   215
+      ask-user-authority                 416 ->   231
+      bearings                           682 ->   391
+      bootstrap-diagnostics              626 ->   428
+      captain-hold-lifecycle             460 ->   361
+      decision-hold-lifecycle            247 ->   182
+      diagnostic-reasoning               292 ->   147
+      firstmate-codexapp                 355 ->   284
+      firstmate-coding-guidelines        610 ->   256
+      firstmate-orca                     257 ->   250
+      fmx-respond                        714 ->   355
+      harness-adapters                   394 ->   337
+      process-event-sources              591 ->   267
+      project-management                 335 ->   207
+      quota-array-dispatch               269 ->   184
+      secondmate-provisioning            537 ->   267
+      stow                               410 ->   276
+      stuck-crewmate-recovery            448 ->   327
+      updatefirstmate                    501 ->   236
+
+(5) body changes between base and target:
+    body changed: firstmate-coding-guidelines
+    (only firstmate-coding-guidelines expected - the captain-approved doc-1 exception)
+
+(2) AGENTS.md section 13 triggers still recognisable in compressed descriptions:
+    ok  bootstrap-diagnostics         
+    ok  diagnostic-reasoning          
+    ok  ask-user-authority            
+    ok  quota-array-dispatch          
+    ok  harness-adapters              
+    ok  firstmate-orca                
+    ok  project-management            
+    ok  stuck-crewmate-recovery       
+    ok  secondmate-provisioning       
+    ok  captain-hold-lifecycle        
+    ok  process-event-sources         
+    ok  fmx-respond                   
+    ok  firstmate-codexapp            
+    ok  firstmate-coding-guidelines   
+
+target descriptions:
+  afk: Enter away-mode supervision. Load when the captain invokes /afk or says they are going afk, when state/.afk exists, when an incoming message starts with FM_INJECT_MARK, or when any state/.subsuper-* marker is involved. It owns the away daemon and the automatic exit when a real unmarked message returns.
+  ahoy: Recap visible session events and guide the captain through visibly unanswered decisions when the captain explicitly invokes /ahoy, with a Bearings fallback when /ahoy is the session's first real captain message.
+  ask-user-authority: Agent-only decision procedure for ask-user findings, and the single owner of finding-decision policy. Load before deciding any ask-user finding; its criteria, not the project's yolo posture, set finding authority.
+  bearings: Fleet digest so the captain can resume in one read. Load when the captain invokes /bearings or asks for a status report, morning brief, catch-up, bearings, "where did I leave off", or "what's in the works"; the file and lavish modes add the dated report and the interactive board. Also load its board-wake handling when a procevent lavish wake matches the bearings board's source id.
+  bootstrap-diagnostics: Agent-only handling playbook for session-start bootstrap diagnostics. Load whenever the digest's bootstrap or NETWORK CHECKS section, or a standalone bin/fm-bootstrap.sh or bin/fm-startup-network.sh run, prints an actionable diagnostic line such as MISSING:, TANGLE:, NEEDS_GH_AUTH, FLEET_SYNC:, NETWORK_CHECKS:, PR_CHECK_MIGRATION:, or any SECONDMATE_ line. Silence or a BOOTSTRAP_INFO: fact needs no load.
+  captain-hold-lifecycle: Agent-only policy for closing captain calls in the captain's own words. Load before treating an investigation, scout report, structured review, or Lavish review as complete, before ending a visual review that exposed a captain decision, when recording or routing the captain's answer, and on any RECORD DIVERGENCE line from the wake drain.
+  decision-hold-lifecycle: Deprecated pointer: load captain-hold-lifecycle instead. Kept only for in-flight briefs that still name this skill, and removed one release after the collapse.
+  diagnostic-reasoning: Agent-only procedure for diagnosing reported bugs. Load before scoping a reported bug and before acting on a diagnostic report.
+  firstmate-codexapp: Agent-only playbook for visible Codex Desktop threads alongside Firstmate. Load before creating, reading, steering, archiving, debugging, or reviewing a Codex App thread for Firstmate work, and before answering a request to make Codex App a native Firstmate backend.
+  firstmate-coding-guidelines: Agent-only reference for changing firstmate's own shared, tracked material as defined by AGENTS.md section 1. Load before editing any of it, whether working as firstmate directly or as a crewmate briefed on a firstmate-repo task.
+  firstmate-orca: Agent-only operator checklist for Firstmate's Orca runtime backend. Load when switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
+  fmx-respond: Agent-only playbook for Relay mentions and public follow-ups. Load on an `x-mention <request_id>`, `x-mode-error ...`, or `public-followup ...` check wake, on any milestone or terminal wake for a Relay-linked task before its completion follow-up, and whenever a promised final public reply must be created, reconciled, or delivered. Relay-only.
+  harness-adapters: Agent-only reference of verified per-harness facts (claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, muse). Load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting, exiting or resuming an agent, or verifying a new adapter.
+  process-event-sources: Agent-only procedure for registered process-to-event sources. Load before arming a long-polling source firstmate owns, before registering a deterministic condition->action watch, and on any `procevent <adapter> <source-id> <sequence>` check wake.
+  project-management: Agent-only procedure for Firstmate project management. Load before adding, creating, removing, or initializing a project; cloning or registering one is add intake and uses the same trigger.
+  quota-array-dispatch: Agent-only decision procedure for resolving a matched crew-dispatch profile array. Load when a dispatch rule or default resolves to more than one profile candidate.
+  secondmate-provisioning: Agent-only reference for persistent secondmates. Load before creating, seeding, validating, launching, recovering, handing backlog to, pushing inherited local material into, or retiring a secondmate home, and before editing data/secondmates.md.
+  stow: Sweep the session for uncaptured durable knowledge, file it to disk, correct the open work records, and curate the home's startup memory. Load when the captain invokes /stow, before a session reset or context compaction, or periodically to keep operational memory current.
+  stuck-crewmate-recovery: Agent-only playbook for stuck or missing ordinary direct reports. Load when the session-start digest reports a direct report's endpoint dead or its metadata has no window, or after a stale wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer.
+  updatefirstmate: Self-update a running firstmate and its secondmates to the latest from origin through the guarded fast-forward path. Load when the captain invokes /updatefirstmate or asks to update firstmate or pull the latest firstmate.
