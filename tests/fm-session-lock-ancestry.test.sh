@@ -35,12 +35,16 @@ NAMED_CLAUDE="$FAKEBIN/claude"
 # --- unit layer: identity behind a deterministic process table ---------------
 
 # Run one library expression with <fakebin> shadowing ps. kill is stubbed so
-# liveness questions are decided by the process table alone.
+# liveness questions are decided by the process table alone. The Windows/MSYS
+# branch is forced off so these ps-simulation cases exercise the ancestry walk
+# on every host, including a real Git Bash host where fm_windows_msys_env
+# would otherwise be true and skip the walk entirely.
 lib_eval() {  # <fakebin> <expression>
   local fakebin=$1 expr=$2
   PATH="$fakebin:$PATH" bash -c "
     . \"\$0\"
     kill() { return 0; }
+    fm_windows_msys_env() { return 1; }
     $expr
   " "$LIB"
 }
@@ -220,6 +224,88 @@ SH
   pass "session-lock: a live version-named session holding the lock is not mistaken for a stale owner"
 }
 
+# --- unit layer: the Windows/MSYS identity path behind a fake tasklist -------
+
+# Run one library expression with fm_windows_msys_env forced true and <fakebin>
+# shadowing tasklist, so the Windows identity path is exercised deterministically
+# on any host, including a non-Windows CI runner.
+lib_eval_windows() {  # <fakebin> <expression>
+  local fakebin=$1 expr=$2
+  PATH="$fakebin:$PATH" bash -c "
+    . \"\$0\"
+    fm_windows_msys_env() { return 0; }
+    $expr
+  " "$LIB"
+}
+
+test_windows_claude_pid_env_identifies_the_session() {
+  local dir fakebin got
+  dir="$TMP_ROOT/windows-claude-pid"
+  fakebin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/state"
+  cat > "$fakebin/tasklist" <<'SH'
+#!/usr/bin/env bash
+set -u
+pid=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    //FI) pid=${2#PID eq }; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$pid" in
+  40404) printf '"claude.exe","40404","Console","1","123,456 K"\n' ;;
+  *) echo "INFO: No tasks are running which match the specified criteria." ;;
+esac
+SH
+  chmod +x "$fakebin/tasklist"
+  printf '40404\n' > "$dir/state/.lock"
+
+  got=$(CLAUDE_PID=40404 lib_eval_windows "$fakebin" 'fm_harness_ancestry_pid') \
+    || fail "the real Windows claude.exe pid named by CLAUDE_PID was not identified"
+  [ "$got" = 40404 ] || fail "ancestry resolved '$got', expected the CLAUDE_PID-named pid 40404"
+  CLAUDE_PID=40404 lib_eval_windows "$fakebin" 'fm_harness_pid_alive 40404' \
+    || fail "a live claude.exe named by CLAUDE_PID was not recognized as a harness"
+  CLAUDE_PID=40404 lib_eval_windows "$fakebin" "fm_session_lock_owned_by_self '$dir/state'" \
+    || fail "the session holding the lock via CLAUDE_PID did not recognize itself as the owner"
+  pass "session-lock: Windows/MSYS identifies its session from CLAUDE_PID verified live via tasklist"
+}
+
+test_windows_dead_claude_pid_is_not_alive() {
+  local fakebin
+  fakebin=$(fm_fakebin "$TMP_ROOT/windows-dead-pid")
+  cat > "$fakebin/tasklist" <<'SH'
+#!/usr/bin/env bash
+echo "INFO: No tasks are running which match the specified criteria."
+SH
+  chmod +x "$fakebin/tasklist"
+  if CLAUDE_PID=50505 lib_eval_windows "$fakebin" 'fm_harness_ancestry_pid'; then
+    fail "a CLAUDE_PID naming a dead process was accepted as this session's identity"
+  fi
+  if CLAUDE_PID=50505 lib_eval_windows "$fakebin" 'fm_harness_pid_alive 50505'; then
+    fail "a dead pid passed the Windows harness-liveness predicate"
+  fi
+  pass "session-lock: Windows/MSYS fails closed when CLAUDE_PID names no live process"
+}
+
+test_windows_missing_claude_pid_fails_closed() {
+  local fakebin
+  fakebin=$(fm_fakebin "$TMP_ROOT/windows-no-env")
+  cat > "$fakebin/tasklist" <<'SH'
+#!/usr/bin/env bash
+echo "INFO: No tasks are running which match the specified criteria."
+SH
+  chmod +x "$fakebin/tasklist"
+  if lib_eval_windows "$fakebin" 'fm_harness_ancestry_pid'; then
+    fail "ancestry resolved with no CLAUDE_PID and no other verified Windows harness env var set"
+  fi
+  pass "session-lock: Windows/MSYS fails closed with no recognized harness pid env var set"
+}
+
+test_windows_claude_pid_env_identifies_the_session
+test_windows_dead_claude_pid_is_not_alive
+test_windows_missing_claude_pid_fails_closed
+
 # --- end-to-end layer: the real Stop auto-arm in real process trees ----------
 
 install_autoarm_scripts() {
@@ -288,13 +374,18 @@ SH
 # launcher exits immediately, so the tree is reparented to init and the ancestry
 # walk terminates inside the fixture. Returns once the hook has recorded its exit
 # code.
+# MSYSTEM is cleared for the fixture tree so fm_windows_msys_env reads false
+# even when this suite itself runs on a real Git Bash host: these fixtures
+# model the Unix ps-ancestry mechanics that the Windows identity path (see
+# fm-session-lock-lib.sh's fm_windows_msys_env) deliberately bypasses, and
+# they have no real Windows pid of their own for that path to verify against.
 run_fixture_tree() {  # <dir> <session-bin> [<daemon-bin>]
   local dir=$1 session_bin=$2 daemon_bin=${3:-} i
   if [ -n "$daemon_bin" ]; then
-    FM_HOME="$dir" FM_SESSION_BIN="$session_bin" FM_FIXTURE_ORPHAN_HERE=0 \
+    FM_HOME="$dir" FM_SESSION_BIN="$session_bin" FM_FIXTURE_ORPHAN_HERE=0 MSYSTEM="" \
       bash -c '"$0" "$1" &' "$daemon_bin" "$dir/daemon.sh"
   else
-    FM_HOME="$dir" FM_FIXTURE_ORPHAN_HERE=1 \
+    FM_HOME="$dir" FM_FIXTURE_ORPHAN_HERE=1 MSYSTEM="" \
       bash -c '"$0" "$1" &' "$session_bin" "$dir/session.sh"
   fi
   i=0
