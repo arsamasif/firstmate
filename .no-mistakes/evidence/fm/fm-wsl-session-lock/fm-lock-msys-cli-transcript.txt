@@ -1,0 +1,23 @@
+=== Simulated Git Bash/MSYS host: OS=Windows_NT MSYSTEM=MINGW64, fake tasklist vouches for pid 40404 as claude.exe ===
+
+--- 1. Acquire: CLAUDE_PID=40404 set (Claude Code session) ---
+$ FM_HOME=$LAB/home-a bin/fm-lock.sh
+lock acquired: harness pid 40404
+exit=0
+lock file contents: 40404
+
+--- 2. Status: holder verified live by tasklist image name ---
+$ FM_HOME=$LAB/home-a bin/fm-lock.sh status
+lock: held by live harness pid 40404
+exit=0
+
+--- 3. Fail-closed control: same host shape, CLAUDE_PID unset ---
+$ FM_HOME=$LAB/home-b bin/fm-lock.sh   (no CLAUDE_PID)
+error: cannot locate harness process in ancestry
+exit=1
+lock file: absent (nothing written)
+
+--- 4. Stale-holder detection: lock names a pid tasklist reports dead ---
+$ FM_HOME=$LAB/home-a bin/fm-lock.sh status   (.lock rewritten to dead pid 50505)
+lock: stale (pid 50505 dead or not a harness)
+exit=0
