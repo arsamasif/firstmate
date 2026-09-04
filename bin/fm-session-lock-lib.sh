@@ -25,6 +25,63 @@ FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$'
 # bin/fm-claude-stop-autoarm.sh.
 FM_HARNESS_NAMES=(claude codex opencode grok kimi pi-signed pi)
 
+# True when this shell is Git Bash / MSYS on Windows. Both env vars are set by
+# the platform itself (OS by Windows, MSYSTEM by the MSYS runtime), not by any
+# harness, so this is a host-shape check, never a harness identity claim.
+fm_windows_msys_env() {
+  [ "${OS:-}" = "Windows_NT" ] && [ -n "${MSYSTEM:-}" ]
+}
+
+# Windows ancestry is unwalkable from Git Bash: MSYS's ps reports a synthetic
+# PID space private to the MSYS subsystem (confirmed: a freshly spawned bash's
+# own $$ does not exist as a Windows PID, and ps -o ppid= resolves straight to 1
+# for every process), so there is no ps-visible parent chain to climb and no
+# translation from an MSYS pid to the real Windows pid of anything above it.
+# The fix is not a better walk - there is no chain here to walk - it is a
+# harness-provided identity that names the real Windows pid directly. Claude
+# Code sets CLAUDE_PID to its own real Windows pid in every process it spawns,
+# so that env var is used as the sole evidence source, verified live and
+# name-matched via `tasklist` (a real Windows PID, so MSYS ps/kill cannot see
+# it either). Only Claude is covered: no other verified harness's Windows env
+# var has been established, so every other harness still fails closed here
+# exactly as it did before this function existed.
+FM_WINDOWS_HARNESS_PID_VARS=(CLAUDE_PID)
+
+# Print the process image name Windows reports for real Windows pid $1, or
+# return 1 if the pid does not exist. `//FI`/`//NH`/`//FO` use Git Bash's
+# double-slash escaping so MSYS does not rewrite them as POSIX paths.
+fm_windows_tasklist_name() {  # <pid>
+  local pid=$1 line name
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  line=$(tasklist //FI "PID eq $pid" //NH //FO CSV 2>/dev/null) || return 1
+  case "$line" in '"'*) ;; *) return 1 ;; esac
+  name=${line#\"}
+  name=${name%%\",*}
+  [ -n "$name" ] || return 1
+  printf '%s\n' "$name"
+}
+
+# True if real Windows pid $1 is alive and its image name matches a verified
+# harness.
+fm_windows_pid_alive_and_matches() {  # <pid>
+  local pid=$1 name
+  name=$(fm_windows_tasklist_name "$pid") || return 1
+  printf '%s' "$name" | grep -qE "$FM_HARNESS_RE"
+}
+
+# Print the one real Windows pid identifying this session, from the first
+# recognized harness-provided pid env var that is set and verifies live - see
+# FM_WINDOWS_HARNESS_PID_VARS above. Returns 1 if none is set or verifies.
+fm_windows_harness_pid() {
+  local var pid
+  for var in "${FM_WINDOWS_HARNESS_PID_VARS[@]}"; do
+    pid=${!var:-}
+    [ -n "$pid" ] || continue
+    fm_windows_pid_alive_and_matches "$pid" && { printf '%s\n' "$pid"; return 0; }
+  done
+  return 1
+}
+
 # Print the exact harness name carried by executable path $1 - its own basename
 # or any directory component - or return 1.
 #
@@ -107,6 +164,10 @@ fm_harness_process_matches() {  # <comm> <args>
 # session cannot be read off the ancestry at all, so the whole contiguous run is
 # reported and the callers below decide what they need from it.
 fm_harness_ancestry_pids() {
+  if fm_windows_msys_env; then
+    fm_windows_harness_pid
+    return $?
+  fi
   local pid=$$ comm args extending=0 printed=0
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
@@ -146,6 +207,10 @@ EOF
 # True if $1 is a live process that looks like a verified harness.
 fm_harness_pid_alive() {
   local pid=$1 comm args
+  if fm_windows_msys_env; then
+    fm_windows_pid_alive_and_matches "$pid"
+    return $?
+  fi
   kill -0 "$pid" 2>/dev/null || return 1
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
   args=$(ps -o args= -p "$pid" 2>/dev/null)

@@ -292,6 +292,21 @@ The current Stop-owned main/secondmate inclusion and child-worktree exclusion ar
 Session-lock ownership in `bin/fm-session-lock-lib.sh` is decided against a session's whole contiguous harness ancestry rather than one chosen pid, so the Stop auto-arm reaches its lock owner wherever that owner sits: the outermost pid of Claude Code's multi-level `bg-spare` hook worker chain, or an inner pid when a harness-named daemon parents the session.
 Harness identity is read from the executable path and `argv[0]` as well as the command basename, because Claude Code's native installer names the per-session executable by its version (`.../share/claude/versions/2.1.220`): `ps -o comm=` reports that path on macOS and the bare version string on Linux, and neither basename names a harness.
 `tests/fm-session-lock-ancestry.test.sh` pins both platforms' reporting semantics behind a deterministic process table and runs the real Stop auto-arm in version-named, daemon-parented, and combined real process trees.
+On Git Bash/MSYS (Windows), MSYS `ps` exposes only a synthetic per-subsystem pid space with no walkable parent chain, so `bin/fm-session-lock-lib.sh` takes its session identity from Claude Code's `CLAUDE_PID` and verifies that pid live by image name through `tasklist`; every other harness stays refused on that host until its own Windows pid evidence is established.
+The same suite pins that path behind a deterministic fake `tasklist` and proves it inert whenever `OS=Windows_NT` and `MSYSTEM` are not both present, asserting on which identity source was consulted rather than on the resolved pid alone.
+Claude Code 2.1.261 was observed on 2026-09-04 under WSL2 Linux exporting `CLAUDE_PID` into a Bash tool call as the pid of its own `claude` process:
+
+```sh
+ps -o comm= -p "$CLAUDE_PID"
+```
+
+Observed output:
+
+```text
+claude
+```
+
+`FM_CLAUDE_LIVE_E2E=1 bin/fm-test-run.sh tests/fm-session-lock-windows-live-e2e.test.sh` is the guard that refreshes the Git Bash result against the real installed Claude Code, including the lock refusal with `CLAUDE_PID` removed; it self-skips on any other host, and no Git Bash run has been recorded yet.
 `tests/fm-watch-arm.test.sh` runs real watcher and arm cycles against durable on-disk state to verify that a delivered reason survives until post-handling acknowledgement and stops replaying after acknowledgement, while an unrelated queue append cannot make a watcher cycle that delivered nothing look successful.
 The same suite ingests a keyed remote-secondmate parent reply through the real adapter, establishes the incremental OPEN DECISIONS cursor, interrupts supervision, and proves re-arm replays every unacknowledged queue row plus the still-open decision through the ordinary drain path.
 It also covers decision-only recovery, interrupted handling, handling-window generation reuse, non-fatal moved-generation acknowledgement with sequence-bounded consumption, and a persistent successor remaining live after recovery is acknowledged.
