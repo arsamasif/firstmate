@@ -383,9 +383,12 @@ test_healthy_window_refuses_to_open_a_park_for_displayed_banner_text() {
     fm_limit_park_observe "$home/state" t1 "$BANNER_QUOTED_PANE" \
     || fail "a banner quoted beside a healthy window opened a park"
   assert_absent "$home/state/t1.limit-park" "the refused observation wrote a record"
-  ! FM_FAKE_QUOTA_PCT=67 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
+  # The hint names no window of its own, so refusing it takes BOTH windows
+  # reading healthy; the weekly row is supplied here for that reason.
+  ! FM_FAKE_QUOTA_PCT=67 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_FAKE_QUOTA_WEEKLY_PCT=80 \
+    FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
     fm_limit_park_observe "$home/state" t1 "$HINT_IN_TOOL_OUTPUT_PANE" \
-    || fail "the hint in a grep result beside a healthy window opened a park"
+    || fail "the hint in a grep result beside two healthy windows opened a park"
   assert_absent "$home/state/t1.limit-park" "the refused observation wrote a record"
   # NON-STICKY: the live banner is refused too while the window reads healthy.
   ! FM_FAKE_QUOTA_PCT=67 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
@@ -757,6 +760,48 @@ test_bootstrap_lines_leaves_a_stateless_home_untouched() {
   pass "fm-limit-resume: bootstrap-lines leaves a home with no state directory untouched, while run refuses it"
 }
 
+# Only a headline names a window. Corroborating a hint-only capture against
+# five_hour alone would refuse a genuine WEEKLY park whenever the five-hour
+# window is healthy, leaving that worker with no declared wait at all - worse
+# than before the gate existed. So an unnamed window is refused only when BOTH
+# windows read healthy.
+test_hint_only_park_is_corroborated_against_both_windows() {
+  local home dir reset banner window named
+  home=$(make_home hint-window); dir=$(dirname "$home")
+  # The classifier reports that no headline named the window, while still
+  # falling back to five_hour for every existing consumer.
+  fm_composer_claude_usage_limit "$HINT_IN_TOOL_OUTPUT_PANE" reset banner window named \
+    || fail "the hint-only capture did not classify as parked"
+  [ "$window" = five_hour ] || fail "hint-only capture named window '$window', not the five_hour fallback"
+  [ "$named" = 0 ] || fail "hint-only capture claimed a headline named its window"
+  fm_composer_claude_usage_limit "$PARKED_PANE" reset banner window named \
+    || fail "the live banner did not classify as parked"
+  [ "$named" = 1 ] || fail "a headline capture reported its window as unnamed"
+  # THE REGRESSION CASE: a real weekly park seen through the hint alone, while
+  # the five-hour window is healthy. Checking five_hour alone would refuse it.
+  FM_FAKE_QUOTA_PCT=67 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_FAKE_QUOTA_WEEKLY_PCT=0 \
+    FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
+    fm_limit_park_observe "$home/state" t1 "$HINT_IN_TOOL_OUTPUT_PANE" \
+    || fail "a spent weekly window did not admit a hint-only park beside a healthy five_hour"
+  assert_present "$home/state/t1.limit-park" "the hint-only park left no record"
+  # DIVERGENCE: the identical capture with BOTH windows healthy is refused, so
+  # the case above turns on the weekly reading and not on the hint itself.
+  fm_limit_park_clear "$home/state" t1
+  ! FM_FAKE_QUOTA_PCT=67 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_FAKE_QUOTA_WEEKLY_PCT=80 \
+    FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
+    fm_limit_park_observe "$home/state" t1 "$HINT_IN_TOOL_OUTPUT_PANE" \
+    || fail "two healthy windows still opened a hint-only park"
+  assert_absent "$home/state/t1.limit-park" "the refused hint-only observation wrote a record"
+  # A NAMED five_hour window is still judged on that row alone: a spent weekly
+  # row must not rescue a banner whose headline named the healthy five-hour one.
+  ! FM_FAKE_QUOTA_PCT=67 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_FAKE_QUOTA_WEEKLY_PCT=0 \
+    FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
+    fm_limit_park_observe "$home/state" t1 "$PARKED_PANE" \
+    || fail "a headline naming five_hour was rescued by the weekly row"
+  assert_absent "$home/state/t1.limit-park" "the refused named-window observation wrote a record"
+  pass "fm_limit_park_observe: a hint-only banner is corroborated against both windows, while a headline is judged on the window it names"
+}
+
 # --- 6. install/uninstall: idempotent, one entry ------------------------------
 
 test_install_cron_is_idempotent() {
@@ -853,6 +898,7 @@ test_reset_phrase_parses_to_next_wall_clock
 test_observe_records_park_and_clears_when_banner_gone
 test_observe_trusts_later_quota_reset_and_says_so
 test_healthy_window_refuses_to_open_a_park_for_displayed_banner_text
+test_hint_only_park_is_corroborated_against_both_windows
 test_crew_state_reports_parked_pane_as_paused
 test_watcher_treats_park_as_declared_wait_not_wedge
 test_daemon_classifies_park_as_pause

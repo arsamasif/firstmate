@@ -189,10 +189,11 @@ if [ -n "$REMOTE_HOST" ]; then
   esac
 fi
 
-# pane_readable is consulted ONLY in the no-run fallback below. The run-step path
-# stays authoritative regardless of pane liveness - judge by the run-step, not the
-# shell - so a finished crew whose endpoint has closed still reports its run-step
-# state (e.g. done) instead of being masked as unknown. Backend-aware
+# pane_readable has exactly two consumers: the usage-limit park check below and
+# the no-run fallback after it. The run-step path stays authoritative regardless
+# of pane liveness - judge by the run-step, not the shell - so a finished crew
+# whose endpoint has closed still reports its run-step state (e.g. done)
+# instead of being masked as unknown. Backend-aware
 # (fm_backend_of_meta defaults absent backend= to tmux, the P1 contract): a
 # herdr task is read through fm_backend_capture instead of a bare tmux probe.
 TASK_BACKEND=$(fm_backend_of_meta "$META")

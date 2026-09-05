@@ -25,9 +25,16 @@
 # OPEN a record when quota-axi is readable and the window the banner NAMES
 # still has more than FM_LIMIT_PARK_CORROBORATE_MAX_PCT remaining (five_hour
 # against quota-axi's five_hour row, weekly against its seven_day row, because
-# the two windows exhaust independently). An unreadable quota-axi, or output
-# carrying no row for that window, still ADMITS the park: a false park costs
-# one spurious steer, while the missed park of 2026-09-04 cost 7.9 idle hours.
+# the two windows exhaust independently). Only a HEADLINE names a window: the
+# `/low-priority` hint carries none, and the classifier's window then falls
+# back to five_hour rather than reporting evidence. An unnamed window is
+# therefore corroborated against BOTH rows and refused only when BOTH still
+# read healthy, because checking a hint-only capture against five_hour alone
+# would refuse a genuine weekly park whenever the five-hour window is healthy
+# and leave that worker with no declared wait at all - worse than before this
+# gate existed. An unreadable quota-axi, or output carrying no row for that
+# window, still ADMITS the park: a false park costs one spurious steer, while
+# the missed park of 2026-09-04 cost 7.9 idle hours.
 # The refusal is a clean no-op on disk - no marker, no episode, no negative
 # cache, no mutation of an existing record - so the next sweep, once quota-axi
 # has caught up with a real park, opens it normally. Refusing to OPEN is the
@@ -453,29 +460,38 @@ _fm_limit_park_recheck() {  # <now>
   return 0
 }
 
+# _fm_limit_park_window_healthy <window>
+# 0 when quota-axi is readable, carries a row for <window>, and that row still
+# reads healthy, which is proof a banner on screen is displayed content rather
+# than a live park. 1 in every other case, including an unreadable quota-axi
+# and a missing row, so a window this host cannot prove never blocks a park.
+_fm_limit_park_window_healthy() {  # <window>
+  fm_limit_park_quota_window "$1" || return 1
+  case "$FM_LIMIT_QUOTA_PCT" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$FM_LIMIT_QUOTA_PCT" -gt "$FM_LIMIT_PARK_CORROBORATE_MAX_PCT" ]
+}
+
 # fm_limit_park_observe <state> <id> <screen-text>
 # Classify one bounded capture. 0 = parked (record created or refreshed),
-# 1 = not parked (any record for <id> removed). A new episode consults
-# quota-axi once, for the corroboration gate and the cross-check together; a
-# refresh only does so under the re-reconcile rule above.
+# 1 = not parked (any record for <id> removed). Opening a record consults
+# quota-axi for the corroboration gate and again for the five-hour cross-check;
+# a refresh only does so under the re-reconcile rule above.
 fm_limit_park_observe() {  # <state> <id> <screen>
-  local state=$1 id=$2 screen=${3-} now reset='' banner='' window='' banner_epoch='' quota_epoch='' quota_pct='' quota_read=0
+  local state=$1 id=$2 screen=${3-} now reset='' banner='' window='' named='' banner_epoch='' quota_epoch='' quota_pct=''
   local prev_episode prev_observed prev_reset
   now=$(fm_limit_park_now)
-  if ! fm_composer_claude_usage_limit "$screen" reset banner window; then
+  if ! fm_composer_claude_usage_limit "$screen" reset banner window named; then
     fm_limit_park_clear "$state" "$id"
     return 1
   fi
-  if [ ! -e "$(fm_limit_park_record_path "$state" "$id")" ] && fm_limit_park_quota_window "$window"; then
-    if [ "$window" != weekly ]; then
-      quota_read=1
-      quota_pct=$FM_LIMIT_QUOTA_PCT
-      quota_epoch=$FM_LIMIT_QUOTA_RESETS_AT
+  if [ ! -e "$(fm_limit_park_record_path "$state" "$id")" ]; then
+    if [ "$named" = 1 ]; then
+      ! _fm_limit_park_window_healthy "$window" || return 1
+    elif _fm_limit_park_window_healthy five_hour && _fm_limit_park_window_healthy weekly; then
+      return 1
     fi
-    case "$FM_LIMIT_QUOTA_PCT" in
-      ''|*[!0-9]*) ;;
-      *) [ "$FM_LIMIT_QUOTA_PCT" -le "$FM_LIMIT_PARK_CORROBORATE_MAX_PCT" ] || return 1 ;;
-    esac
   fi
   if fm_limit_park_read "$state" "$id" && [ "$FM_LIMIT_PARK_BANNER_RESET" = "$reset" ] \
     && [ "$FM_LIMIT_PARK_WINDOW" = "$window" ]; then
@@ -494,7 +510,7 @@ fm_limit_park_observe() {  # <state> <id> <screen>
     _fm_limit_park_reconcile "$banner_epoch" ''
     FM_LIMIT_PARK_NOTE="weekly limit, not the five-hour window; a declared wait with no automatic resume (bin/fm-limit-resume.sh owns the five-hour window only)"
   else
-    if [ "$quota_read" = 0 ] && fm_limit_park_quota_window; then
+    if fm_limit_park_quota_window; then
       quota_pct=$FM_LIMIT_QUOTA_PCT
       quota_epoch=$FM_LIMIT_QUOTA_RESETS_AT
     fi

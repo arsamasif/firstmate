@@ -110,7 +110,7 @@ MIN_PCT=$FM_LIMIT_RESUME_MIN_PCT
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 
 usage() {
-  sed -n '2,70p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,78p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 }
 
 log() {

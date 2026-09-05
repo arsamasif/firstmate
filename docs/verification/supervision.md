@@ -509,15 +509,18 @@ Observed output:
 0.1.30
 ok - fm_composer_claude_usage_limit: the live banner fixture, styled or plain, classifies as parked with its reset phrase
 ok - fm_composer_claude_usage_limit: the banner-free pane, a busy footer, a headline above a busy footer, and prose are not parked
+ok - fm_composer_claude_usage_limit: one session's banner text is parked while it sits at the pane tail and not once ordinary work has scrolled it away
 ok - fm_limit_park_parse_reset: zoned and local phrases resolve to the next such wall clock; garbage is refused
 ok - fm_limit_park_observe: writes the record with the later of banner and quota-axi, keeps the episode on refresh, clears when the banner is gone
 ok - fm_limit_park_observe: a later quota-axi reset wins over the banner and the note says which was trusted
 ok - fm_limit_park_observe: a park opens only when the window the banner names corroborates it, and refusing poisons nothing
+ok - fm_limit_park_observe: a hint-only banner is corroborated against both windows, while a headline is judged on the window it names
 ok - fm-crew-state: a parked Claude pane reports paused with the park detail; the same pane without the banner does not
 ok - fm-watch: an active park record is a declared wait (paused class) for the watcher; without it nothing is declared
 ok - fm-supervise-daemon: classify_stale routes a park record as a declared pause and a bare stale as before
 ok - fm-limit-resume run: a reset in the past with a healthy window sends exactly one steer through fm-send, and a second sweep sends none
 ok - fm-limit-resume run: a reset in the future, an exhausted window, and the off switch all send nothing
+ok - fm-limit-resume run: a weekly park observed mid-sweep never decides another task's five-hour resume
 ok - fm-limit-resume run: a same-banner refresh after a passed reset re-reads quota-axi, advances the episode when the live reset moved, and steers once more when that reset has really passed
 ok - fm-limit-resume run: a weekly park is recorded as a declared wait that says it is not resumed, is never steered, and the five-hour banner in the same home still is
 ok - fm-limit-resume run: a record with no reconciled reset waits on an exhausted live window and resumes on a healthy one without waiting for the next window's end
@@ -534,7 +537,11 @@ ok - fm-operational-input: usage-window-reset is a registered kind distinct from
 
 Observed guarantee: the parked pane is a declared external wait with its reset time everywhere the fleet reads one, exactly one resume steer per park episode leaves through `bin/fm-send.sh` after the reset with a healthy window, a same-banner refresh past its reset becomes a new episode only when the live window still reads exhausted with a later reset, a weekly park and a headline above a busy footer are never steered, a recorded primary receives one guarded `usage-window-reset` input, an unrecorded primary receives a durable wake plus the bootstrap line, two scheduler installs leave one entry, and a stale beacon inside a recorded park is described as parked rather than as a lapsed watcher.
 The live banner fixture and the same pane without it are the positive and negative controls, so the classifier cannot go vacuous.
-The rendered banner is only a screen signal: a park record opens just when quota-axi reports the window the banner names as spent, so the same words quoted in a transcript beside a healthy window are not a park, and the refusal leaves nothing behind that stops the next observation from opening the real one.
+The rendered banner is only a screen signal, and the record owner decides whether a park is real.
+A record opens when the window the banner's headline names still reads spent, when quota-axi cannot be read or carries no row for that window, or - for a hint-only capture, which names no window at all - when either the five-hour or the weekly row still reads spent.
+So the same words quoted in a transcript beside a healthy window are not a park, while a genuine weekly park seen through the hint alone is still recorded even though the five-hour window is healthy.
+The refusal leaves nothing behind that stops the next observation from opening the real one.
+This holds for the record owner only: `bin/fm-crew-state.sh` still reports its paused verdict from the raw screen signal, which is recorded as known debt rather than proven here.
 A home whose path extends another home's never installs, reports, or uninstalls over its neighbour's crontab entry.
 The rendered banner is a vendor surface; re-run `bin/fm-test-run.sh tests/fm-limit-resume.test.sh` after a Claude Code upgrade and refresh this record if the banner wording changes.
 

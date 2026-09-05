@@ -399,14 +399,20 @@ FM_COMPOSER_CLAUDE_LIMIT_WEEKLY_RE="hit your weekly limit"
 FM_COMPOSER_CLAUDE_LIMIT_HINT_RE='/low-priority to continue now'
 FM_COMPOSER_CLAUDE_LIMIT_RESET_RE='resets? (at )?([0-9]{1,2}(:[0-9]{2})?[[:space:]]*(am|pm)?([[:space:]]*\([A-Za-z_/+-]+\))?)'
 
-# fm_composer_claude_usage_limit <screen-text> [<reset-var>] [<banner-var>] [<window-var>]
+# fm_composer_claude_usage_limit <screen-text> [<reset-var>] [<banner-var>] [<window-var>] [<named-var>]
 # 0 when the last 12 non-blank rows show Claude's usage-limit banner on an idle pane;
 # <reset-var> receives the raw reset phrase after "resets" (empty when the
 # headline carries none), <banner-var> the matched headline or hint line, plain
 # text, single line, and <window-var> `five_hour` or `weekly`.
+# <named-var> receives 1 when a HEADLINE named that window and 0 when only the
+# hint matched, because the hint carries no window of its own and <window-var>
+# then falls back to `five_hour` rather than reporting evidence. A caller that
+# corroborates the verdict against a live quota window must read this: treating
+# an unnamed window as five_hour refuses a genuine weekly park whenever the
+# five-hour window is healthy (bin/fm-limit-park-lib.sh owns that rule).
 # 1 when no signal matches inside that window or it shows the busy footer.
-fm_composer_claude_usage_limit() {  # <screen> [<reset-var>] [<banner-var>] [<window-var>]
-  local __fmcl_screen=${1-} __fmcl_reset_var=${2-} __fmcl_banner_var=${3-} __fmcl_window_var=${4-}
+fm_composer_claude_usage_limit() {  # <screen> [<reset-var>] [<banner-var>] [<window-var>] [<named-var>]
+  local __fmcl_screen=${1-} __fmcl_reset_var=${2-} __fmcl_banner_var=${3-} __fmcl_window_var=${4-} __fmcl_named_var=${5-}
   local __fmcl_plain __fmcl_tail __fmcl_line __fmcl_headline='' __fmcl_hint='' __fmcl_reset='' __fmcl_window=five_hour
   __fmcl_plain=$(printf '%s\n' "$__fmcl_screen" | fm_composer_strip_ansi)
   __fmcl_tail=$(printf '%s\n' "$__fmcl_plain" | grep -v '^[[:space:]]*$' | tail -12)
@@ -435,6 +441,13 @@ fm_composer_claude_usage_limit() {  # <screen> [<reset-var>] [<banner-var>] [<wi
     printf -v "$__fmcl_banner_var" '%s' "$__fmcl_line"
   fi
   [ -z "$__fmcl_window_var" ] || printf -v "$__fmcl_window_var" '%s' "$__fmcl_window"
+  if [ -n "$__fmcl_named_var" ]; then
+    if [ -n "$__fmcl_headline" ]; then
+      printf -v "$__fmcl_named_var" '%s' 1
+    else
+      printf -v "$__fmcl_named_var" '%s' 0
+    fi
+  fi
   return 0
 }
 
