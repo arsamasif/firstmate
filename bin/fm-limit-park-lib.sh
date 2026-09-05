@@ -27,6 +27,10 @@
 #                            epoch when one is known, else the first observation
 #   observed_at=<epoch>      first sighting of this episode
 #   last_seen=<epoch>        most recent sighting (refreshed on every observe)
+#   window=<five_hour|weekly> which account window the banner names; the
+#                            five-hour window is the only one the resume owner
+#                            resumes, a weekly park is a declared wait with no
+#                            automatic resume and note= says so
 #   banner=<text>            the matched headline or hint line, plain text
 #   banner_reset=<text>      the raw reset phrase parsed from the headline
 #   banner_resets_at=<epoch|> that phrase as an epoch, empty when unparsable
@@ -34,13 +38,31 @@
 #   quota_resets_at=<epoch|> quota-axi five_hour resetsAt at first sight
 #   resets_at=<epoch|>       the reconciled reset: the LATER of banner and quota
 #   reset_source=<banner|quota|agree|none>
-#   note=<text>              set when the two sources disagreed, naming both
+#   rechecked_at=<epoch|>    last time a refresh re-read quota-axi (see below)
+#   note=<text>              set when the two sources disagreed, naming both,
+#                            or when the park is on the weekly window
 # Cross-check rule: when the banner and quota-axi disagree, the later time wins,
 # because resuming early merely re-parks the worker on the same limit while
 # resuming late only delays it; the disagreement is logged in note= and by the
 # resume owner. A missing quota-axi row keeps the banner's time; a missing or
 # unparsable banner time keeps quota-axi's; neither leaves resets_at empty and
 # reset_source=none, which the resume owner treats as "recheck quota-axi live".
+# A weekly park never consults the five_hour row: its reset is the banner's
+# when that parses, else empty, and the resume owner leaves it alone.
+# Re-reconcile rule: a refresh (same banner, same reset phrase) whose
+# reconciled five-hour reset has already PASSED re-reads quota-axi, at most
+# once per FM_LIMIT_PARK_RECHECK_SECS, because the banner Claude keeps
+# rendering after a refused resume is the one case the first reconciliation
+# cannot see: the window did not really move when the banner said it would.
+# When the live window still reads exhausted (percentRemaining below
+# FM_LIMIT_RESUME_MIN_PCT, or unreadable) and its five_hour resetsAt is later
+# than the record's reset AND still ahead of the clock, the record takes it
+# and the EPISODE advances to it, so the one-steer-per-episode receipt no
+# longer matches and a second steer goes out once the live reset has passed
+# and the window reads healthy. A live window that already reads healthy
+# keeps the record as it is even when its resetsAt has moved, because that
+# time names the NEXT window and waiting on it would be the incident again;
+# so does a live reset that has not moved or already lies in the past.
 #
 # Resumed marker: state/<id>.limit-park.resumed - written ONLY by
 # bin/fm-limit-resume.sh after it sends the one resume steer for an episode:
@@ -86,6 +108,13 @@ FM_LIMIT_PARK_VERSION=v1
 FM_LIMIT_QUOTA_TIMEOUT_SECS=${FM_LIMIT_QUOTA_TIMEOUT_SECS:-15}
 # Past `until` by this much, an outage record no longer softens the watcher alarm.
 FM_LIMIT_OUTAGE_GRACE_SECS=${FM_LIMIT_OUTAGE_GRACE_SECS:-3600}
+# Floor between two quota-axi re-reads for one record whose reset has passed.
+FM_LIMIT_PARK_RECHECK_SECS=${FM_LIMIT_PARK_RECHECK_SECS:-300}
+# quota-axi five_hour percentRemaining at or above which the window reads
+# healthy: the resume owner's steer floor and the re-reconcile rule's one
+# definition of "still exhausted".
+FM_LIMIT_RESUME_MIN_PCT=${FM_LIMIT_RESUME_MIN_PCT:-40}
+case "$FM_LIMIT_RESUME_MIN_PCT" in ''|*[!0-9]*) FM_LIMIT_RESUME_MIN_PCT=40 ;; esac
 # Test seam for the data-only quota source. Production never sets it.
 FM_LIMIT_QUOTA_BIN=${FM_LIMIT_QUOTA_BIN:-quota-axi}
 
@@ -243,6 +272,7 @@ fm_limit_park_quota_window() {
 FM_LIMIT_PARK_EPISODE=
 FM_LIMIT_PARK_OBSERVED_AT=
 FM_LIMIT_PARK_LAST_SEEN=
+FM_LIMIT_PARK_WINDOW=
 FM_LIMIT_PARK_BANNER=
 FM_LIMIT_PARK_BANNER_RESET=
 FM_LIMIT_PARK_BANNER_RESETS_AT=
@@ -250,12 +280,14 @@ FM_LIMIT_PARK_QUOTA_PCT=
 FM_LIMIT_PARK_QUOTA_RESETS_AT=
 FM_LIMIT_PARK_RESETS_AT=
 FM_LIMIT_PARK_RESET_SOURCE=
+FM_LIMIT_PARK_RECHECKED_AT=
 FM_LIMIT_PARK_NOTE=
 
 _fm_limit_park_reset_vars() {
   FM_LIMIT_PARK_EPISODE=
   FM_LIMIT_PARK_OBSERVED_AT=
   FM_LIMIT_PARK_LAST_SEEN=
+  FM_LIMIT_PARK_WINDOW=
   FM_LIMIT_PARK_BANNER=
   FM_LIMIT_PARK_BANNER_RESET=
   FM_LIMIT_PARK_BANNER_RESETS_AT=
@@ -263,6 +295,7 @@ _fm_limit_park_reset_vars() {
   FM_LIMIT_PARK_QUOTA_RESETS_AT=
   FM_LIMIT_PARK_RESETS_AT=
   FM_LIMIT_PARK_RESET_SOURCE=
+  FM_LIMIT_PARK_RECHECKED_AT=
   FM_LIMIT_PARK_NOTE=
 }
 
@@ -289,6 +322,7 @@ fm_limit_park_read() {  # <state> <id>
       episode) FM_LIMIT_PARK_EPISODE=$value ;;
       observed_at) FM_LIMIT_PARK_OBSERVED_AT=$value ;;
       last_seen) FM_LIMIT_PARK_LAST_SEEN=$value ;;
+      window) FM_LIMIT_PARK_WINDOW=$value ;;
       banner) FM_LIMIT_PARK_BANNER=$value ;;
       banner_reset) FM_LIMIT_PARK_BANNER_RESET=$value ;;
       banner_resets_at) FM_LIMIT_PARK_BANNER_RESETS_AT=$value ;;
@@ -296,9 +330,11 @@ fm_limit_park_read() {  # <state> <id>
       quota_resets_at) FM_LIMIT_PARK_QUOTA_RESETS_AT=$value ;;
       resets_at) FM_LIMIT_PARK_RESETS_AT=$value ;;
       reset_source) FM_LIMIT_PARK_RESET_SOURCE=$value ;;
+      rechecked_at) FM_LIMIT_PARK_RECHECKED_AT=$value ;;
       note) FM_LIMIT_PARK_NOTE=$value ;;
     esac
   done < "$path"
+  [ -n "$FM_LIMIT_PARK_WINDOW" ] || FM_LIMIT_PARK_WINDOW=five_hour
   [ -n "$FM_LIMIT_PARK_EPISODE" ] && [ -n "$FM_LIMIT_PARK_OBSERVED_AT" ]
 }
 
@@ -311,6 +347,7 @@ _fm_limit_park_write() {  # <state> <id>  (from FM_LIMIT_PARK_*)
     printf 'episode=%s\n' "$FM_LIMIT_PARK_EPISODE"
     printf 'observed_at=%s\n' "$FM_LIMIT_PARK_OBSERVED_AT"
     printf 'last_seen=%s\n' "$FM_LIMIT_PARK_LAST_SEEN"
+    printf 'window=%s\n' "${FM_LIMIT_PARK_WINDOW:-five_hour}"
     printf 'banner=%s\n' "$(printf '%s' "$FM_LIMIT_PARK_BANNER" | LC_ALL=C tr '\n\r' '  ')"
     printf 'banner_reset=%s\n' "$FM_LIMIT_PARK_BANNER_RESET"
     printf 'banner_resets_at=%s\n' "$FM_LIMIT_PARK_BANNER_RESETS_AT"
@@ -318,6 +355,7 @@ _fm_limit_park_write() {  # <state> <id>  (from FM_LIMIT_PARK_*)
     printf 'quota_resets_at=%s\n' "$FM_LIMIT_PARK_QUOTA_RESETS_AT"
     printf 'resets_at=%s\n' "$FM_LIMIT_PARK_RESETS_AT"
     printf 'reset_source=%s\n' "$FM_LIMIT_PARK_RESET_SOURCE"
+    printf 'rechecked_at=%s\n' "$FM_LIMIT_PARK_RECHECKED_AT"
     printf 'note=%s\n' "$(printf '%s' "$FM_LIMIT_PARK_NOTE" | LC_ALL=C tr '\n\r' '  ')"
   } > "$tmp" || { rm -f "$tmp"; return 1; }
   chmod 0600 "$tmp" 2>/dev/null || true
@@ -361,21 +399,52 @@ _fm_limit_park_reconcile() {  # <banner-epoch|> <quota-epoch|>
   fi
 }
 
+# _fm_limit_park_recheck <now>: the re-reconcile rule above, on the record
+# loaded in FM_LIMIT_PARK_*. 0 when the episode advanced (caller writes).
+_fm_limit_park_recheck() {  # <now>
+  local now=$1 prev=$FM_LIMIT_PARK_RESETS_AT
+  [ "${FM_LIMIT_PARK_WINDOW:-five_hour}" = five_hour ] || return 1
+  case "$prev" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$now" -ge "$prev" ] || return 1
+  case "$FM_LIMIT_PARK_RECHECKED_AT" in
+    ''|*[!0-9]*) ;;
+    *) [ $((now - FM_LIMIT_PARK_RECHECKED_AT)) -ge "$FM_LIMIT_PARK_RECHECK_SECS" ] || return 1 ;;
+  esac
+  FM_LIMIT_PARK_RECHECKED_AT=$now
+  fm_limit_park_quota_window || return 1
+  FM_LIMIT_PARK_QUOTA_PCT=$FM_LIMIT_QUOTA_PCT
+  FM_LIMIT_PARK_QUOTA_RESETS_AT=$FM_LIMIT_QUOTA_RESETS_AT
+  case "$FM_LIMIT_QUOTA_PCT" in
+    ''|*[!0-9]*) ;;
+    *) [ "$FM_LIMIT_QUOTA_PCT" -lt "$FM_LIMIT_RESUME_MIN_PCT" ] || return 1 ;;
+  esac
+  case "$FM_LIMIT_QUOTA_RESETS_AT" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$FM_LIMIT_QUOTA_RESETS_AT" -gt "$prev" ] && [ "$FM_LIMIT_QUOTA_RESETS_AT" -gt "$now" ] || return 1
+  FM_LIMIT_PARK_RESETS_AT=$FM_LIMIT_QUOTA_RESETS_AT
+  FM_LIMIT_PARK_RESET_SOURCE=quota
+  FM_LIMIT_PARK_EPISODE=$FM_LIMIT_QUOTA_RESETS_AT
+  FM_LIMIT_PARK_NOTE="reset $(fm_limit_park_fmt_epoch "$prev") passed while the banner stayed and the window still reads ${FM_LIMIT_QUOTA_PCT:-?}%; quota-axi five_hour now resets $(fm_limit_park_fmt_epoch "$FM_LIMIT_QUOTA_RESETS_AT"); trusting the later live time as a new episode"
+  return 0
+}
+
 # fm_limit_park_observe <state> <id> <screen-text>
 # Classify one bounded capture. 0 = parked (record created or refreshed),
 # 1 = not parked (any record for <id> removed). A new episode consults
-# quota-axi once for the cross-check; refreshes never do.
+# quota-axi once for the cross-check; a refresh only does so under the
+# re-reconcile rule above.
 fm_limit_park_observe() {  # <state> <id> <screen>
-  local state=$1 id=$2 screen=${3-} now reset='' banner='' banner_epoch='' quota_epoch='' quota_pct=''
+  local state=$1 id=$2 screen=${3-} now reset='' banner='' window='' banner_epoch='' quota_epoch='' quota_pct=''
   local prev_episode prev_observed prev_reset
   now=$(fm_limit_park_now)
-  if ! fm_composer_claude_usage_limit "$screen" reset banner; then
+  if ! fm_composer_claude_usage_limit "$screen" reset banner window; then
     fm_limit_park_clear "$state" "$id"
     return 1
   fi
-  if fm_limit_park_read "$state" "$id" && [ "$FM_LIMIT_PARK_BANNER_RESET" = "$reset" ]; then
+  if fm_limit_park_read "$state" "$id" && [ "$FM_LIMIT_PARK_BANNER_RESET" = "$reset" ] \
+    && [ "$FM_LIMIT_PARK_WINDOW" = "$window" ]; then
     FM_LIMIT_PARK_LAST_SEEN=$now
     FM_LIMIT_PARK_BANNER=$banner
+    _fm_limit_park_recheck "$now" || true
     _fm_limit_park_write "$state" "$id"
     return 0
   fi
@@ -384,13 +453,19 @@ fm_limit_park_observe() {  # <state> <id> <screen>
   prev_reset=$FM_LIMIT_PARK_RESETS_AT
   _fm_limit_park_reset_vars
   fm_limit_park_parse_reset "$reset" "$now" banner_epoch || banner_epoch=''
-  if fm_limit_park_quota_window; then
-    quota_pct=$FM_LIMIT_QUOTA_PCT
-    quota_epoch=$FM_LIMIT_QUOTA_RESETS_AT
+  if [ "$window" = weekly ]; then
+    _fm_limit_park_reconcile "$banner_epoch" ''
+    FM_LIMIT_PARK_NOTE="weekly limit, not the five-hour window; a declared wait with no automatic resume (bin/fm-limit-resume.sh owns the five-hour window only)"
+  else
+    if fm_limit_park_quota_window; then
+      quota_pct=$FM_LIMIT_QUOTA_PCT
+      quota_epoch=$FM_LIMIT_QUOTA_RESETS_AT
+    fi
+    _fm_limit_park_reconcile "$banner_epoch" "$quota_epoch"
   fi
-  _fm_limit_park_reconcile "$banner_epoch" "$quota_epoch"
   FM_LIMIT_PARK_OBSERVED_AT=$now
   FM_LIMIT_PARK_LAST_SEEN=$now
+  FM_LIMIT_PARK_WINDOW=$window
   FM_LIMIT_PARK_BANNER=$banner
   FM_LIMIT_PARK_BANNER_RESET=$reset
   FM_LIMIT_PARK_BANNER_RESETS_AT=$banner_epoch
@@ -424,7 +499,10 @@ fm_limit_park_reset_due() {  # <state> <id>
 # crew-state detail, or empty when no record exists.
 fm_limit_park_describe() {  # <state> <id>
   fm_limit_park_read "$1" "$2" || return 1
-  if [ -n "$FM_LIMIT_PARK_RESETS_AT" ]; then
+  if [ "$FM_LIMIT_PARK_WINDOW" = weekly ]; then
+    printf 'parked on the Claude weekly usage limit%s; not resumed automatically (the resume sweep owns the five-hour window only)' \
+      "${FM_LIMIT_PARK_RESETS_AT:+ until $(fm_limit_park_fmt_epoch "$FM_LIMIT_PARK_RESETS_AT")}"
+  elif [ -n "$FM_LIMIT_PARK_RESETS_AT" ]; then
     printf 'parked on the Claude usage limit until %s, resumes automatically after the reset' \
       "$(fm_limit_park_fmt_epoch "$FM_LIMIT_PARK_RESETS_AT")"
   else

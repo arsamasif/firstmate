@@ -25,12 +25,17 @@
 # itself is bin/fm-composer-lib.sh's fm_composer_claude_usage_limit), and then,
 # for a task that is parked:
 #   1. reads the reconciled reset time (the later of the banner and quota-axi's
-#      five_hour resetsAt; a record with neither rechecks quota-axi live);
+#      five_hour resetsAt; a record with neither rechecks quota-axi live: a
+#      healthy live percentRemaining is ready on its own, because once the
+#      park window has reset the live resetsAt already names the NEXT window,
+#      and only an exhausted live read waits on that time);
 #   2. waits until that reset has passed AND the window reads healthy
 #      (quota-axi five_hour percentRemaining >= FM_LIMIT_RESUME_MIN_PCT,
 #      default 40; an unreadable quota-axi is logged and the reset time alone
 #      is trusted, because a resume that re-parks is harmless while a missed
-#      one is the incident);
+#      one is the incident); a record on the WEEKLY window (window=weekly) is
+#      never resumed here, this owner resumes the five-hour window only, and
+#      the record's note says so;
 #   3. sends exactly ONE resume steer for the park episode through
 #      bin/fm-send.sh (durable inbox record plus the constant doorbell; never
 #      raw send-keys) and writes the episode's resumed marker, so a second run
@@ -80,18 +85,17 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 LOG="$STATE/.limit-resume.log"
 LOG_MAX_BYTES=${FM_LIMIT_RESUME_LOG_MAX_BYTES:-200000}
-MIN_PCT=${FM_LIMIT_RESUME_MIN_PCT:-40}
 MIN_GAP_SECS=${FM_LIMIT_RESUME_MIN_GAP_SECS:-1800}
 GRACE=${FM_GUARD_GRACE:-300}
 INJECT_RETRIES=${FM_LIMIT_RESUME_INJECT_RETRIES:-3}
 INJECT_SLEEP=${FM_LIMIT_RESUME_INJECT_SLEEP:-0.5}
 PRIMARY_ID=.primary
 WAKE_KEY=usage-window-reset
-case "$MIN_PCT" in ''|*[!0-9]*) MIN_PCT=40 ;; esac
 case "$MIN_GAP_SECS" in ''|*[!0-9]*) MIN_GAP_SECS=1800 ;; esac
 
 # shellcheck source=bin/fm-limit-park-lib.sh
 . "$SCRIPT_DIR/fm-limit-park-lib.sh"
+MIN_PCT=$FM_LIMIT_RESUME_MIN_PCT
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-backend-hometag-lib.sh
@@ -155,24 +159,30 @@ quota_once() {
 # window_ready <id>: 0 once the record's reset has passed and the window reads
 # healthy. Logs the reason when not ready.
 window_ready() {  # <id>
-  local id=$1 now resets
+  local id=$1 now resets pct=''
   now=$(date +%s)
   fm_limit_park_read "$STATE" "$id" || return 1
+  if [ "$FM_LIMIT_PARK_WINDOW" = weekly ]; then
+    log "$id is parked on the weekly limit${FM_LIMIT_PARK_RESETS_AT:+ until $(fm_limit_park_fmt_epoch "$FM_LIMIT_PARK_RESETS_AT")}; this owner resumes the five-hour window only, leaving it as a declared wait"
+    return 1
+  fi
   resets=$FM_LIMIT_PARK_RESETS_AT
   quota_once
-  if [ -z "$resets" ] && [ "$QUOTA_OK" -eq 1 ] && [ -n "$FM_LIMIT_QUOTA_RESETS_AT" ]; then
-    resets=$FM_LIMIT_QUOTA_RESETS_AT
-  fi
-  if [ -n "$resets" ] && [ "$now" -lt "$resets" ]; then
-    log "$id still parked until $(fm_limit_park_fmt_epoch "$resets") (${FM_LIMIT_PARK_RESET_SOURCE:-live quota})"
+  [ "$QUOTA_OK" -eq 1 ] && pct=$FM_LIMIT_QUOTA_PCT
+  if [ -n "$resets" ]; then
+    if [ "$now" -lt "$resets" ]; then
+      log "$id still parked until $(fm_limit_park_fmt_epoch "$resets") ($FM_LIMIT_PARK_RESET_SOURCE)"
+      return 1
+    fi
+  elif [ -z "$pct" ]; then
+    log "$id parked with no reset time from the banner and no readable quota-axi window; waiting for either"
+    return 1
+  elif [ "$pct" -lt "$MIN_PCT" ] && [ -n "$FM_LIMIT_QUOTA_RESETS_AT" ] && [ "$now" -lt "$FM_LIMIT_QUOTA_RESETS_AT" ]; then
+    log "$id still parked until $(fm_limit_park_fmt_epoch "$FM_LIMIT_QUOTA_RESETS_AT") (live quota, ${pct}% remaining)"
     return 1
   fi
-  if [ -z "$resets" ] && { [ "$QUOTA_OK" -ne 1 ] || [ -z "$FM_LIMIT_QUOTA_PCT" ]; }; then
-    log "$id parked with no reset time from the banner or quota-axi; waiting for either"
-    return 1
-  fi
-  if [ "$QUOTA_OK" -eq 1 ] && [ -n "$FM_LIMIT_QUOTA_PCT" ] && [ "$FM_LIMIT_QUOTA_PCT" -lt "$MIN_PCT" ]; then
-    log "$id reset passed but the five_hour window reads ${FM_LIMIT_QUOTA_PCT}% (< ${MIN_PCT}%); waiting"
+  if [ -n "$pct" ] && [ "$pct" -lt "$MIN_PCT" ]; then
+    log "$id reset passed but the five_hour window reads ${pct}% (< ${MIN_PCT}%); waiting"
     return 1
   fi
   [ -n "$FM_LIMIT_PARK_NOTE" ] && log "$id reset cross-check: $FM_LIMIT_PARK_NOTE"
@@ -187,7 +197,7 @@ already_resumed() {  # <id>
   if fm_limit_park_resumed_read "$STATE" "$id" && [ -n "$FM_LIMIT_RESUMED_SENT_AT" ]; then
     now=$(date +%s)
     if [ $(( now - FM_LIMIT_RESUMED_SENT_AT )) -lt "$MIN_GAP_SECS" ]; then
-      log "$id resumed ${FM_LIMIT_RESUMED_SENT_AT}s ago is inside the ${MIN_GAP_SECS}s minimum gap; not ringing again"
+      log "$id resumed $(( now - FM_LIMIT_RESUMED_SENT_AT ))s ago is inside the ${MIN_GAP_SECS}s minimum gap; not ringing again"
       return 0
     fi
   fi

@@ -444,9 +444,14 @@ if [ "$HARNESS" = claude ] && [ -z "$REMOTE_HOST" ] && [ -n "$BACKEND_TARGET" ] 
   && pane_readable "$BACKEND_TARGET"; then
   PARK_SCREEN=$(fm_backend_capture "$TASK_BACKEND" "$BACKEND_TARGET" 40 "$EXPECTED_LABEL" 2>/dev/null) || PARK_SCREEN=
   PARK_RESET=
-  if [ -n "$PARK_SCREEN" ] && fm_composer_claude_usage_limit "$PARK_SCREEN" PARK_RESET; then
+  PARK_WINDOW=
+  if [ -n "$PARK_SCREEN" ] && fm_composer_claude_usage_limit "$PARK_SCREEN" PARK_RESET PARK_BANNER PARK_WINDOW; then
     if ! PARK_DETAIL=$(fm_limit_park_describe "$STATE" "$ID" 2>/dev/null); then
-      PARK_DETAIL="parked on the Claude usage limit${PARK_RESET:+ until $PARK_RESET}, resumes automatically after the reset"
+      if [ "$PARK_WINDOW" = weekly ]; then
+        PARK_DETAIL="parked on the Claude weekly usage limit${PARK_RESET:+ until $PARK_RESET}; not resumed automatically (the resume sweep owns the five-hour window only)"
+      else
+        PARK_DETAIL="parked on the Claude usage limit${PARK_RESET:+ until $PARK_RESET}, resumes automatically after the reset"
+      fi
     fi
     emit paused pane "$PARK_DETAIL"
   fi

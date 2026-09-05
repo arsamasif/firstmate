@@ -375,32 +375,45 @@ fm_busy_lines_match() {  # [harness]
 # epoch is the record owner's job (bin/fm-limit-park-lib.sh), because that
 # needs a clock and a time zone this classifier deliberately does not read.
 # Styling is stripped first so a styled capture (tmux -e) classifies exactly
-# like a plain one. Matched case-insensitively against the plain text, never
-# against a busy footer, so a worker that is mid-turn cannot read as parked.
-FM_COMPOSER_CLAUDE_LIMIT_HEADLINE_RE="hit your (session|usage|(five|5)[- ]hour|weekly) limit"
+# like a plain one. Matched case-insensitively against the plain text.
+#
+# The verdict names the WINDOW the park is on: `five_hour` for the session,
+# usage, and five-hour headlines and for the hint alone; `weekly` for the
+# weekly-limit headline, which is a different window with its own reset that
+# bin/fm-limit-resume.sh does not own (a weekly park is still a declared wait,
+# never a wedge, but it is never resumed by the five-hour sweep). The weekly
+# headline is therefore NOT in the five-hour headline set.
+#
+# The banner is never matched against a busy pane: when the last 12 non-blank
+# rows carry Claude's delivery busy footer (fm_busy_lines_match claude, the
+# same signature every submit acknowledgement reads), the worker is mid-turn
+# and a headline still scrolled in its transcript is history, not a park.
+FM_COMPOSER_CLAUDE_LIMIT_HEADLINE_RE="hit your (session|usage|(five|5)[- ]hour) limit"
+FM_COMPOSER_CLAUDE_LIMIT_WEEKLY_RE="hit your weekly limit"
 FM_COMPOSER_CLAUDE_LIMIT_HINT_RE='/low-priority to continue now'
 FM_COMPOSER_CLAUDE_LIMIT_RESET_RE='resets? (at )?([0-9]{1,2}(:[0-9]{2})?[[:space:]]*(am|pm)?([[:space:]]*\([A-Za-z_/+-]+\))?)'
 
-# fm_composer_claude_usage_limit <screen-text> [<reset-var>] [<banner-var>]
-# 0 when the screen shows Claude's usage-limit banner; <reset-var> receives the
-# raw reset phrase after "resets" (empty when the headline carries none) and
-# <banner-var> the matched headline or hint line, plain text, single line.
-# 1 when no signal matches.
-fm_composer_claude_usage_limit() {  # <screen> [<reset-var>] [<banner-var>]
-  local __fmcl_screen=${1-} __fmcl_reset_var=${2-} __fmcl_banner_var=${3-}
-  local __fmcl_plain __fmcl_line __fmcl_headline='' __fmcl_hint='' __fmcl_reset=''
+# fm_composer_claude_usage_limit <screen-text> [<reset-var>] [<banner-var>] [<window-var>]
+# 0 when the screen shows Claude's usage-limit banner on an idle pane;
+# <reset-var> receives the raw reset phrase after "resets" (empty when the
+# headline carries none), <banner-var> the matched headline or hint line, plain
+# text, single line, and <window-var> `five_hour` or `weekly`.
+# 1 when no signal matches or the pane's tail shows the busy footer.
+fm_composer_claude_usage_limit() {  # <screen> [<reset-var>] [<banner-var>] [<window-var>]
+  local __fmcl_screen=${1-} __fmcl_reset_var=${2-} __fmcl_banner_var=${3-} __fmcl_window_var=${4-}
+  local __fmcl_plain __fmcl_line __fmcl_headline='' __fmcl_hint='' __fmcl_reset='' __fmcl_window=five_hour
   __fmcl_plain=$(printf '%s\n' "$__fmcl_screen" | fm_composer_strip_ansi)
-  while IFS= read -r __fmcl_line; do
-    if [ -z "$__fmcl_headline" ] && printf '%s' "$__fmcl_line" | LC_ALL=C grep -qiE "$FM_COMPOSER_CLAUDE_LIMIT_HEADLINE_RE"; then
-      __fmcl_headline=$__fmcl_line
-    elif [ -z "$__fmcl_hint" ] && printf '%s' "$__fmcl_line" | LC_ALL=C grep -qiF "$FM_COMPOSER_CLAUDE_LIMIT_HINT_RE"; then
-      __fmcl_hint=$__fmcl_line
-    fi
-  done <<EOF
-$__fmcl_plain
-EOF
+  __fmcl_headline=$(printf '%s\n' "$__fmcl_plain" \
+    | LC_ALL=C grep -m1 -iE "$FM_COMPOSER_CLAUDE_LIMIT_HEADLINE_RE|$FM_COMPOSER_CLAUDE_LIMIT_WEEKLY_RE") || __fmcl_headline=''
+  __fmcl_hint=$(printf '%s\n' "$__fmcl_plain" | LC_ALL=C grep -m1 -iF "$FM_COMPOSER_CLAUDE_LIMIT_HINT_RE") || __fmcl_hint=''
   [ -n "$__fmcl_headline" ] || [ -n "$__fmcl_hint" ] || return 1
+  if printf '%s\n' "$__fmcl_plain" | grep -v '^[[:space:]]*$' | tail -12 | fm_busy_lines_match claude; then
+    return 1
+  fi
   if [ -n "$__fmcl_headline" ]; then
+    if printf '%s' "$__fmcl_headline" | LC_ALL=C grep -qiE "$FM_COMPOSER_CLAUDE_LIMIT_WEEKLY_RE"; then
+      __fmcl_window=weekly
+    fi
     __fmcl_reset=$(printf '%s' "$__fmcl_headline" | LC_ALL=C grep -oiE "$FM_COMPOSER_CLAUDE_LIMIT_RESET_RE" | head -1)
     __fmcl_reset=${__fmcl_reset#[Rr]eset}
     __fmcl_reset=${__fmcl_reset#s}
@@ -414,6 +427,7 @@ EOF
     fm_composer_normalize_trim_var __fmcl_line
     printf -v "$__fmcl_banner_var" '%s' "$__fmcl_line"
   fi
+  [ -z "$__fmcl_window_var" ] || printf -v "$__fmcl_window_var" '%s' "$__fmcl_window"
   return 0
 }
 

@@ -53,6 +53,30 @@ IDLE_PANE=$(cat <<'EOF'
   ❯
 EOF
 )
+# The headline left in transcript position above a worker that has since taken
+# a turn: Claude's live busy footer sits under it, so this pane is WORKING.
+BUSY_AFTER_BANNER_PANE=$(cat <<'EOF'
+  You've hit your session limit · resets 9pm (America/New_York)
+  /upgrade or /usage-credits to finish what you're working on.
+
+  ⏺ Resuming from the review gate.
+
+  ✻ Thinking… (12s · esc to interrupt)
+EOF
+)
+# The weekly window's headline in the same idle pane: a declared wait this
+# feature does not resume.
+WEEKLY_PANE=$(cat <<'EOF'
+  ⏺ Reading the stale path in the watcher.
+
+  You've hit your weekly limit · resets Sep 11 at 9am (America/New_York)
+  /upgrade or /usage-credits to finish what you're working on.
+
+  ─────────────────────────────────────────────────────────────
+
+  ❯
+EOF
+)
 
 # --- fixtures ----------------------------------------------------------------
 
@@ -132,6 +156,7 @@ SH
   mkdir -p "$home/wt-t1"
   printf '%s\n' "$PARKED_PANE" > "$dir/parked.txt"
   printf '%s\n' "$IDLE_PANE" > "$dir/idle.txt"
+  printf '%s\n' "$WEEKLY_PANE" > "$dir/weekly.txt"
   printf '%s\n' "$home"
 }
 
@@ -175,12 +200,16 @@ inbox_records() {  # <home> <id> -> count of unhandled inbox records
 # --- 1. the shape: banner classifies as parked, its absence does not ----------
 
 test_banner_fixture_classifies_parked() {
-  local reset banner
-  fm_composer_claude_usage_limit "$PARKED_PANE" reset banner \
+  local reset banner window
+  fm_composer_claude_usage_limit "$PARKED_PANE" reset banner window \
     || fail "the live 2026-09-04 banner fixture did not classify as parked"
   [ "$reset" = "9pm (America/New_York)" ] \
     || fail "reset phrase was not parsed from the headline: '$reset'"
   case "$banner" in *"hit your session limit"*) ;; *) fail "banner line not reported: '$banner'" ;; esac
+  [ "$window" = five_hour ] || fail "the session-limit headline named window '$window', not five_hour"
+  fm_composer_claude_usage_limit "$WEEKLY_PANE" reset banner window \
+    || fail "the weekly headline did not classify as parked (it is still a declared wait)"
+  [ "$window" = weekly ] || fail "the weekly headline named window '$window', not weekly"
   # Styled capture (tmux -e) must classify identically.
   fm_composer_claude_usage_limit "$(printf '\033[2m%s\033[0m' "$PARKED_PANE")" reset banner \
     || fail "styled banner capture did not classify as parked"
@@ -197,9 +226,11 @@ test_pane_without_banner_is_not_parked() {
     || fail "the same pane minus the banner classified as parked"
   ! fm_composer_claude_usage_limit '  ⏺ Working… (esc to interrupt)' reset \
     || fail "a busy footer classified as parked"
+  ! fm_composer_claude_usage_limit "$BUSY_AFTER_BANNER_PANE" reset \
+    || fail "a headline in transcript position above a live busy footer classified as parked"
   ! fm_composer_claude_usage_limit 'the session limit is generous today' reset \
     || fail "prose mentioning the limit classified as parked"
-  pass "fm_composer_claude_usage_limit: the banner-free pane, a busy footer, and prose are not parked"
+  pass "fm_composer_claude_usage_limit: the banner-free pane, a busy footer, a headline above a busy footer, and prose are not parked"
 }
 
 test_reset_phrase_parses_to_next_wall_clock() {
@@ -341,9 +372,11 @@ test_run_sends_nothing_before_reset_or_with_exhausted_window() {
     run_resume "$home" run || fail "run failed"
   [ "$(inbox_records "$home" t1)" = 0 ] || fail "a steer was sent while the reset is in the future"
   grep -q 'still parked until' "$home/state/.limit-resume.log" || fail "log does not explain the wait"
-  # Reset passed but the window still reads exhausted: wait.
+  # Reset passed, the live reset has not moved, but the window still reads
+  # exhausted: wait on the health floor.
   sed -i 's/^resets_at=.*/resets_at=1/' "$home/state/t1.limit-park"
-  FM_FAKE_QUOTA_PCT=5 FM_FAKE_PANE_FILE="$dir/parked.txt" run_resume "$home" run || fail "run failed"
+  FM_FAKE_QUOTA_PCT=5 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch -60) FM_FAKE_PANE_FILE="$dir/parked.txt" \
+    run_resume "$home" run || fail "run failed"
   [ "$(inbox_records "$home" t1)" = 0 ] || fail "a steer was sent while the window reads 5%"
   grep -q 'reads 5%' "$home/state/.limit-resume.log" || fail "log does not explain the exhausted window"
   # Feature off: nothing at all, even when due.
@@ -351,6 +384,105 @@ test_run_sends_nothing_before_reset_or_with_exhausted_window() {
   FM_FAKE_QUOTA_PCT=95 FM_FAKE_PANE_FILE="$dir/parked.txt" run_resume "$home" run || fail "run failed"
   [ "$(inbox_records "$home" t1)" = 0 ] || fail "a steer was sent with config/limit-resume off"
   pass "fm-limit-resume run: a reset in the future, an exhausted window, and the off switch all send nothing"
+}
+
+test_same_banner_refresh_after_passed_reset_resends_once_window_really_moved() {
+  local home dir n episode
+  home=$(make_home run-re-reconcile); dir=$(dirname "$home")
+  # First sighting with quota-axi unreadable: the banner alone is trusted.
+  FM_FAKE_QUOTA_ABSENT=1 FM_FAKE_PANE_FILE="$dir/parked.txt" run_resume "$home" run || fail "run failed"
+  fm_limit_park_read "$home/state" t1 || fail "no park record"
+  [ "$FM_LIMIT_PARK_RESET_SOURCE" = banner ] || fail "source should be banner with quota-axi absent: $FM_LIMIT_PARK_RESET_SOURCE"
+  episode=$FM_LIMIT_PARK_EPISODE
+  # The banner's reset passes; the first steer goes out on the reset alone.
+  sed -i 's/^resets_at=.*/resets_at=1/' "$home/state/t1.limit-park"
+  FM_FAKE_QUOTA_ABSENT=1 FM_FAKE_PANE_FILE="$dir/parked.txt" run_resume "$home" run || fail "run failed"
+  [ "$(inbox_records "$home" t1)" = 1 ] || fail "expected the first steer, found $(inbox_records "$home" t1)"
+  # Claude keeps rendering the SAME banner: the worker is still refused. The
+  # refresh (past its recheck floor) re-reads quota-axi, which now says the
+  # window is exhausted until 10 minutes from now, so the episode advances and
+  # nothing rings yet.
+  sed -i 's/^rechecked_at=.*/rechecked_at=1/' "$home/state/t1.limit-park"
+  FM_FAKE_QUOTA_PCT=0 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 600) FM_FAKE_PANE_FILE="$dir/parked.txt" \
+    run_resume "$home" run || fail "run failed"
+  [ "$(inbox_records "$home" t1)" = 1 ] || fail "a steer went out while the live window is still exhausted"
+  fm_limit_park_read "$home/state" t1
+  [ "$FM_LIMIT_PARK_EPISODE" != "$episode" ] || fail "the episode did not advance when the live reset moved"
+  [ "$FM_LIMIT_PARK_RESET_SOURCE" = quota ] || fail "re-reconcile did not trust the live quota reset: $FM_LIMIT_PARK_RESET_SOURCE"
+  case "$FM_LIMIT_PARK_NOTE" in *"passed while the banner stayed"*) ;; *) fail "re-reconcile note missing: '$FM_LIMIT_PARK_NOTE'" ;; esac
+  grep -q 't1 still parked until' "$home/state/.limit-resume.log" || fail "log does not explain the new wait"
+  # The live reset passes and the window reads healthy: the second steer goes
+  # out for the new episode, with the same banner still on screen.
+  sed -i 's/^resets_at=.*/resets_at=1/; s/^rechecked_at=.*/rechecked_at=1/' "$home/state/t1.limit-park"
+  FM_FAKE_QUOTA_PCT=95 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch -60) FM_FAKE_PANE_FILE="$dir/parked.txt" \
+    FM_LIMIT_RESUME_MIN_GAP_SECS=0 run_resume "$home" run || fail "run failed"
+  n=$(inbox_records "$home" t1)
+  [ "$n" = 2 ] || fail "expected a second steer once the live window really reset, found $n"
+  fm_limit_park_resumed_read "$home/state" t1 || fail "resumed marker unreadable"
+  [ "$FM_LIMIT_RESUMED_EPISODE" = "$FM_LIMIT_PARK_EPISODE" ] || fail "the receipt does not name the advanced episode"
+  # Negative control: a refresh whose live reset has NOT moved keeps the
+  # episode and rings nothing more.
+  FM_FAKE_QUOTA_PCT=95 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch -60) FM_FAKE_PANE_FILE="$dir/parked.txt" \
+    FM_LIMIT_RESUME_MIN_GAP_SECS=0 run_resume "$home" run || fail "run failed"
+  [ "$(inbox_records "$home" t1)" = 2 ] || fail "a refresh with an unmoved live reset rang again"
+  pass "fm-limit-resume run: a same-banner refresh after a passed reset re-reads quota-axi, advances the episode when the live reset moved, and steers once more when that reset has really passed"
+}
+
+test_weekly_park_is_a_declared_wait_that_never_steers() {
+  local home dir out
+  home=$(make_home run-weekly); dir=$(dirname "$home")
+  FM_FAKE_QUOTA_PCT=95 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch -60) FM_FAKE_PANE_FILE="$dir/weekly.txt" \
+    run_resume "$home" run || fail "run failed"
+  assert_present "$home/state/t1.limit-park" "a weekly park was not recorded as a declared wait"
+  fm_limit_park_read "$home/state" t1 || fail "weekly record unreadable"
+  [ "$FM_LIMIT_PARK_WINDOW" = weekly ] || fail "record window is '$FM_LIMIT_PARK_WINDOW', not weekly"
+  [ "$FM_LIMIT_PARK_RESET_SOURCE" != quota ] || fail "a weekly park took the five_hour quota row as its reset"
+  case "$FM_LIMIT_PARK_NOTE" in *"no automatic resume"*) ;; *) fail "the record does not say the weekly park is not resumed: '$FM_LIMIT_PARK_NOTE'" ;; esac
+  [ "$(inbox_records "$home" t1)" = 0 ] || fail "a weekly park was steered"
+  # Even with a reset pinned into the past and a healthy window: never.
+  sed -i 's/^resets_at=.*/resets_at=1/' "$home/state/t1.limit-park"
+  FM_FAKE_QUOTA_PCT=95 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch -60) FM_FAKE_PANE_FILE="$dir/weekly.txt" \
+    run_resume "$home" run || fail "run failed"
+  [ "$(inbox_records "$home" t1)" = 0 ] || fail "a weekly park was steered after a pinned past reset"
+  assert_absent "$home/state/t1.limit-park.resumed" "a weekly park got a resumed receipt"
+  grep -q 't1 is parked on the weekly limit' "$home/state/.limit-resume.log" || fail "log does not say why the weekly park is left alone"
+  out=$(PATH="$dir/fakebin:$PATH" FM_FAKE_PANE_FILE="$dir/weekly.txt" FM_STATE_OVERRIDE="$home/state" "$CREW_STATE" t1)
+  case "$out" in "state: paused"*"weekly usage limit"*"not resumed automatically"*) ;; *) fail "crew-state does not report the weekly park as a non-resuming pause: $out" ;; esac
+  # Positive control in the same home: the five-hour banner with a past reset
+  # and the same healthy window IS steered.
+  FM_FAKE_QUOTA_PCT=95 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch -60) FM_FAKE_PANE_FILE="$dir/parked.txt" \
+    run_resume "$home" run || fail "run failed"
+  fm_limit_park_read "$home/state" t1 || fail "five-hour record missing"
+  [ "$FM_LIMIT_PARK_WINDOW" = five_hour ] || fail "the five-hour banner did not replace the weekly record: $FM_LIMIT_PARK_WINDOW"
+  sed -i 's/^resets_at=.*/resets_at=1/' "$home/state/t1.limit-park"
+  FM_FAKE_QUOTA_PCT=95 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch -60) FM_FAKE_PANE_FILE="$dir/parked.txt" \
+    run_resume "$home" run || fail "run failed"
+  [ "$(inbox_records "$home" t1)" = 1 ] || fail "the five-hour banner in the same home was not steered after its reset"
+  pass "fm-limit-resume run: a weekly park is recorded as a declared wait that says it is not resumed, is never steered, and the five-hour banner in the same home still is"
+}
+
+test_unknown_reset_is_ready_on_a_healthy_live_window() {
+  local home dir
+  home=$(make_home run-unknown-reset); dir=$(dirname "$home")
+  # Hint-only banner (no reset phrase) seen while quota-axi is absent: the
+  # record has no reset at all (reset_source=none).
+  printf '  ⚠ /low-priority to continue now at lower priority · uses your weekly limit\n\n  ❯\n' > "$dir/hint-only.txt"
+  FM_FAKE_QUOTA_ABSENT=1 FM_FAKE_PANE_FILE="$dir/hint-only.txt" run_resume "$home" run || fail "run failed"
+  fm_limit_park_read "$home/state" t1 || fail "hint-only park was not recorded"
+  [ "$FM_LIMIT_PARK_RESET_SOURCE" = none ] || fail "expected reset_source=none, got $FM_LIMIT_PARK_RESET_SOURCE"
+  [ "$(inbox_records "$home" t1)" = 0 ] || fail "a steer went out with no reset and no quota"
+  grep -q 'no reset time' "$home/state/.limit-resume.log" || fail "log does not explain the missing reset"
+  # quota-axi readable but exhausted, with a live resetsAt in the future: wait on it.
+  FM_FAKE_QUOTA_PCT=3 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 900) FM_FAKE_PANE_FILE="$dir/hint-only.txt" \
+    run_resume "$home" run || fail "run failed"
+  [ "$(inbox_records "$home" t1)" = 0 ] || fail "a steer went out on an exhausted live window"
+  grep -q 'live quota, 3% remaining' "$home/state/.limit-resume.log" || fail "log does not name the live wait"
+  # The window has reset: quota-axi reads healthy and its resetsAt is already the
+  # NEXT window's end. That must not be waited on.
+  FM_FAKE_QUOTA_PCT=100 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 17000) FM_FAKE_PANE_FILE="$dir/hint-only.txt" \
+    run_resume "$home" run || fail "run failed"
+  [ "$(inbox_records "$home" t1)" = 1 ] || fail "a healthy live window with an unknown reset did not resume (found $(inbox_records "$home" t1))"
+  pass "fm-limit-resume run: a record with no reconciled reset waits on an exhausted live window and resumes on a healthy one without waiting for the next window's end"
 }
 
 test_run_never_touches_a_non_claude_or_unparked_task() {
@@ -530,6 +662,9 @@ test_watcher_treats_park_as_declared_wait_not_wedge
 test_daemon_classifies_park_as_pause
 test_run_sends_exactly_one_steer_after_reset
 test_run_sends_nothing_before_reset_or_with_exhausted_window
+test_same_banner_refresh_after_passed_reset_resends_once_window_really_moved
+test_weekly_park_is_a_declared_wait_that_never_steers
+test_unknown_reset_is_ready_on_a_healthy_live_window
 test_run_never_touches_a_non_claude_or_unparked_task
 test_run_injects_reset_into_recorded_primary_pane
 test_run_defers_primary_injection_while_composer_holds_text
