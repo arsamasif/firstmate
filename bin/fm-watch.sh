@@ -126,6 +126,13 @@ mkdir -p "$STATE"
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
+# Usage-limit park records: a Claude worker parked on the account's usage
+# window is a declared external wait the worker could not append itself.
+# bin/fm-limit-park-lib.sh owns the record; this watcher observes each Claude
+# pane's capture into it and treats an active record exactly like a paused:
+# line (task_declares_wait below), never as a wedge suspect.
+# shellcheck source=bin/fm-limit-park-lib.sh
+. "$SCRIPT_DIR/fm-limit-park-lib.sh"
 # Steering-inbox loss detection: bin/fm-task-inbox-lib.sh owns the record,
 # doorbell, and re-ring ladder contracts; this watcher only supplies the busy
 # gate and the wake emission (inbox_steer_check below).
@@ -584,6 +591,42 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
 # completed, ages the task's spawn record instead so a fresh task still gets a
 # bound. The caller checks that the pane is busy and routes a crossed bound
 # through busy_turn_bound_check, never anything that touches the worker itself.
+# task_declares_wait: 0 when <task> is on a declared external wait by either
+# declaration the fleet recognises - its own paused:/captain-held status line, or
+# an active usage-limit park record. Every gate in this file that used to read
+# only the status line reads this instead, so a park cannot be cleared, wedge
+# timed, or re-surfaced every poll merely because the worker never appended a
+# verb before the limit refused its turn.
+task_declares_wait() {  # <task>
+  local task=$1
+  [ -n "$task" ] || return 1
+  status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")" && return 0
+  fm_limit_park_active "$STATE" "$task"
+}
+
+# limit_park_observe: hand a Claude pane's capture to the park record owner and
+# surface a NEW park episode exactly once as an informational check wake (the
+# reset time is what the captain wants to know; the tokenless resume owner does
+# the resuming). Later polls of the same episode stay silent here and take the
+# declared-wait cadence through handle_paused_stale.
+limit_park_observe() {  # <window> <task> <tail40>
+  local win=$1 task=$2 tail40=$3 key marker reason
+  [ -n "$task" ] || return 1
+  [ "$(window_harness "$win")" = claude ] || return 1
+  fm_limit_park_observe "$STATE" "$task" "$tail40" || return 1
+  key=$(window_key "$win")
+  marker="$STATE/.limit-park-surfaced-$key"
+  fm_limit_park_read "$STATE" "$task" || return 0
+  if [ "$(cat "$marker" 2>/dev/null || true)" != "$FM_LIMIT_PARK_EPISODE" ]; then
+    reason="check: usage-limit-park: fm-$task $(fm_limit_park_describe "$STATE" "$task") - a declared external wait, not a wedge; nothing to do unless the reset passes without a resume"
+    fm_wake_append check "limit-park:$task" "$reason" || exit 1
+    printf '%s' "$FM_LIMIT_PARK_EPISODE" > "$marker"
+    triage_log "usage-limit park recorded for $win ($FM_LIMIT_PARK_EPISODE)"
+    wake "$reason"
+  fi
+  return 0
+}
+
 busy_turn_over_age() {  # <task>
   local task=$1 f
   f="$STATE/$task.turn-ended"
@@ -618,7 +661,13 @@ handle_paused_stale() {  # <window> <task> <hash>
   mtime=$(stat_mtime "$statusf")
   case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
   age=$(( $(date +%s) - mtime ))
-  if status_is_captain_held "$(last_status_line "$statusf")"; then
+  if fm_limit_park_read "$STATE" "$task"; then
+    # Parked on the usage limit: age from the park's first sighting, and a
+    # reason that names the reset instead of a declared pause.
+    case "$FM_LIMIT_PARK_OBSERVED_AT" in ''|*[!0-9]*) ;; *) age=$(( $(date +%s) - FM_LIMIT_PARK_OBSERVED_AT )) ;; esac
+    detail="usage-limit park, awaiting the window reset"
+    reason="$(fm_limit_park_describe "$STATE" "$task") - parked ${age}s, rechecked on a long cadence not a wedge; confirm the tokenless resume owner is armed (bin/fm-limit-resume.sh status)"
+  elif status_is_captain_held "$(last_status_line "$statusf")"; then
     detail="captain-held, awaiting the captain"
     reason="captain-held ${age}s, awaiting the captain - verified hold transfer, rechecked on a long cadence not a wedge; answer the held decision or release the hold"
   else
@@ -647,7 +696,7 @@ handle_paused_stale() {  # <window> <task> <hash>
 busy_turn_bound_check() {  # <window> <task> <hash> <since-file> <escalation-file>
   local win=$1 task=$2 h=$3 since_file=$4 escalation_file=$5 key statusf declared
   statusf="$STATE/$task.status"
-  if status_is_paused_or_captain_held "$(last_status_line "$statusf")"; then
+  if task_declares_wait "$task"; then
     if afk_present; then
       # Away mode is daemon-owned, so this bound hands off the PLAIN wake identity
       # and lets the daemon classify the declaration itself - the undecorated
@@ -707,6 +756,13 @@ pause_state_class() {  # <window> <task>
   key=$(window_key "$win")
   last=$(last_status_line "$STATE/$task.status")
   recheck_file="$STATE/.paused-rechecked-$key"
+  if fm_limit_park_active "$STATE" "$task"; then
+    # A usage-limit park is admitted on its record alone: the banner IS the
+    # live agent (a dead pane shows no banner), so no liveness gate applies.
+    date +%s > "$recheck_file"
+    printf 'paused'
+    return
+  fi
   if ! status_is_paused_or_captain_held "$last"; then
     rm -f "$recheck_file"
     crew_absorb_class "$task"
@@ -1377,8 +1433,9 @@ EOF
     [ -z "$task" ] || inbox_steer_check "$w" "$task"
     key=$(window_key "$w")
     last=$(last_status_line "$STATE/$task.status")
-    if ! status_is_paused_or_captain_held "$last" && [ -e "$STATE/.paused-$key" ]; then
+    if ! task_declares_wait "$task" && [ -e "$STATE/.paused-$key" ]; then
       clear_pause_tracking "$key"
+      rm -f "$STATE/.limit-park-surfaced-$key"
     fi
     # An idle secondmate endpoint is healthy by design, so a mate is admitted to
     # the pane-stale path ONLY to serve a declared wait's bounded re-surface -
@@ -1391,6 +1448,7 @@ EOF
       continue
     fi
     tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || continue
+    limit_park_observe "$w" "$task" "$tail40" || true
     h=$(printf '%s' "$tail40" | hash_pane)
     hf="$STATE/.hash-$key"
     cf="$STATE/.count-$key"
@@ -1495,7 +1553,7 @@ EOF
             esac
           else
             task=$(window_to_task "$w" "$STATE")
-            if [ -e "$pf" ] || status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")"; then
+            if [ -e "$pf" ] || task_declares_wait "$task"; then
               case "$(pause_state_class "$w" "$task")" in
                 paused)  handle_paused_stale "$w" "$task" "$h" ;;
                 working) clear_pause_state "$key"
@@ -1525,7 +1583,7 @@ EOF
         # is cleared - but not in the same poll the declared-pause cadence just
         # recorded it, or the re-surface throttle it depends on would be erased and
         # the pause would re-surface every poll instead of once per long cadence.
-        if [ "$paused_bound" -ne 0 ] && [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! status_is_paused_or_captain_held "$(last_status_line "$STATE/$(window_to_task "$w" "$STATE").status")"; }; then
+        if [ "$paused_bound" -ne 0 ] && [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! task_declares_wait "$(window_to_task "$w" "$STATE")"; }; then
           clear_pause_tracking "$key"
         fi
       fi
@@ -1540,7 +1598,7 @@ EOF
         clear_write_tracking "$key"
       fi
       task=$(window_to_task "$w" "$STATE")
-      if ! afk_present && status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")" && [ "$busy_now" -ne 0 ]; then
+      if ! afk_present && task_declares_wait "$task" && [ "$busy_now" -ne 0 ]; then
         case "$(pause_state_class "$w" "$task")" in
           paused) handle_paused_stale "$w" "$task" "$h" ;;
           *)      clear_pause_tracking "$key" ;;

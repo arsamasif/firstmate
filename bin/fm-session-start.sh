@@ -659,6 +659,11 @@ if [ "$READ_ONLY" -eq 0 ]; then
   [ "$REEMIT" -eq 0 ] || NETWORK_STAGE_LOCKED=0
   "$SCRIPT_DIR/fm-startup-network.sh" start \
     --locked "$NETWORK_STAGE_LOCKED" --harvest-pid $$ >/dev/null 2>&1 || true
+  # Record the pane this primary runs in, so the tokenless usage-limit resume
+  # sweep (bin/fm-limit-resume.sh, scheduler-run with no TMUX_PANE of its own)
+  # can type the reset input into it. Best-effort: outside a reachable pane the
+  # record is cleared and bootstrap below prints the plain-language line.
+  FM_PRIMARY_HARNESS="$PRIMARY_HARNESS" "$SCRIPT_DIR/fm-limit-resume.sh" record-primary >/dev/null 2>&1 || true
 fi
 
 # --- 2. bootstrap --------------------------------------------------------
@@ -667,16 +672,19 @@ fi
 # re-block this digest and race the worker's sweeps against themselves.
 stage bootstrap
 subsection "BOOTSTRAP"
+# FM_PRIMARY_HARNESS hands bootstrap this digest's own harness detection, so
+# the usage-limit resume lines (bin/fm-limit-resume.sh bootstrap-lines) judge
+# the primary from the same fact the digest prints rather than re-detecting.
 if [ "$READ_ONLY" -eq 1 ]; then
-  BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK=skip \
+  BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK=skip FM_PRIMARY_HARNESS="$PRIMARY_HARNESS" \
     FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
 elif [ "$REEMIT" -eq 1 ]; then
-  BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_LOCKED=1 FM_BOOTSTRAP_NETWORK=skip \
+  BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_LOCKED=1 FM_BOOTSTRAP_NETWORK=skip FM_PRIMARY_HARNESS="$PRIMARY_HARNESS" \
     FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
 else
   BOOT_OUT=$(
     "$SCRIPT_DIR/fm-herdr-session-cleanup.sh" 2>&1 || true
-    FM_BOOTSTRAP_NETWORK=skip FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" \
+    FM_BOOTSTRAP_NETWORK=skip FM_TASKS_AXI_COMPATIBLE="$TASKS_AXI_COMPATIBLE" FM_PRIMARY_HARNESS="$PRIMARY_HARNESS" \
       "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1
   )
 fi

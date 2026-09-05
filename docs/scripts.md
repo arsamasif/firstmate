@@ -76,6 +76,9 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-watch-checkpoint.sh` | Run one bounded foreground watcher checkpoint for Codex-style supervision            |
 | `fm-watch.sh`            | Singleton-safe watcher: absorb benign wakes, detect stalled local-secondmate wake queues, and exit on actionable ones |
 | `fm-inactive-reconcile.sh` | Reconcile long-inactive direct crewmate terminal outcomes without forge access |
+| `fm-limit-resume.sh`     | Tokenless owner that resumes Claude workers and the primary after a usage-window reset, with an idempotent scheduler install |
+| `fm-limit-park-lib.sh`   | Usage-limit park record, banner-versus-quota-axi reset reconciliation, outage record, and primary-pane record |
+| `fm-primary-inject-lib.sh` | The one guarded path (pane, busy, empty composer, type once) for typing an operational input into the primary pane |
 | `fm-afk-start.sh`        | Run the common sourceable away-mode daemon entry in the foreground                      |
 | `fm-afk-launch.sh`       | Own away-mode entry, exit, rollback, and any backend terminal lifecycle                 |
 | `fm-afk-return.sh`       | Own deterministic return shutdown, catch-up evidence, and the firstmate-actionable blocker gate |

@@ -189,6 +189,7 @@ The shared symptom is a healthy-looking pane with no work in progress, so each a
 | Exit command | `/exit` |
 | Interrupt | single Escape |
 | Skill invocation | `/<skill>` (e.g. `/no-mistakes`) |
+| Usage-limit park | When the account's five-hour window is exhausted, Claude Code refuses every turn and renders `You've hit your session limit · resets 9pm (America/New_York)` plus `⚠ /low-priority to continue now at lower priority · uses your weekly limit` (live 2026-09-04; recorded against Claude Code 2.1.261 on 2026-09-05). Every Claude worker and a Claude primary share that window, so they park together. `bin/fm-composer-lib.sh`'s `fm_composer_claude_usage_limit` owns the shape and names the window (`five_hour`, or `weekly` for the `hit your weekly limit` headline, which is a declared wait the sweep never resumes); a headline above the live busy footer is a worker mid-turn, not a park. The park is a declared external wait, never a wedge, and `bin/fm-limit-resume.sh` resumes the five-hour park after the reset with no tokens (`docs/watcher-continuity.md` "Usage-limit outage"). Never interrupt, relaunch, or tear down a worker for it. |
 
 First launch in a fresh worktree, or first ever on a machine, may show a trust or bypass-permissions confirmation.
 After every spawn, peek the pane within about 20 seconds.

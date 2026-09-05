@@ -13,6 +13,9 @@
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "TANGLE: <remediation>",
+#                 "LIMIT_RESUME: <remediation>" and
+#                 "BOOTSTRAP_INFO: usage-limit resume armed (...)"
+#                 (bin/fm-limit-resume.sh bootstrap-lines owns both),
 #                 "SECONDMATE_SYNC: secondmate <id>: skipped: <reason>",
 #                 "NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>",
 #                 "BOOTSTRAP_INFO: nudged fm-<id> with '<message>'",
@@ -1267,6 +1270,10 @@ detect_local_config() {
     echo "MISSING_MANUAL: cursor-agent (instructions: $(manual_install_url cursor-agent))"
   fi
   crew_dispatch_validate
+  # Usage-limit resume arming: one BOOTSTRAP_INFO fact when the tokenless sweep
+  # is armed, an actionable LIMIT_RESUME line when it is not or when this
+  # primary cannot be reached by it; bin/fm-limit-resume.sh owns the wording.
+  "$SCRIPT_DIR/fm-limit-resume.sh" bootstrap-lines 2>/dev/null || true
   if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
     && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
     echo "BOOTSTRAP_INFO: tasks-axi available"

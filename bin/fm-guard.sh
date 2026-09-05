@@ -52,6 +52,10 @@ STALE_BANNER_MARKER="$STATE/.guard-watcher-stale-banner"
 . "$SCRIPT_DIR/fm-tangle-lib.sh"
 # shellcheck source=bin/fm-supervision-lib.sh
 . "$SCRIPT_DIR/fm-supervision-lib.sh"
+# Usage-limit outage record: a stale beacon inside a recorded park window is a
+# parked session, not a lapsed watcher (bin/fm-limit-park-lib.sh owns the record).
+# shellcheck source=bin/fm-limit-park-lib.sh
+. "$SCRIPT_DIR/fm-limit-park-lib.sh"
 
 # Deterministic episode key from the qualitative down-state (the failing
 # condition), NOT the beacon mtime: under the auto-arm model a healthy
@@ -172,7 +176,38 @@ fi
 # No fresh watcher with tasks in flight is the dangerous state: emit a prominent,
 # bordered banner FIRST so it reads as an alarm, not a buried stderr line. Later
 # calls in the same episode get a one-line reminder only.
-if [ "$watcher_healthy" = false ]; then
+if [ "$watcher_healthy" = false ] && fm_limit_park_outage_current "$STATE"; then
+  # The beacon is stale because the session was parked on the Claude usage
+  # limit, which refused every turn (including the rewake that would have
+  # re-armed). Say that, truthfully and once per episode, instead of alarming
+  # about a lapsed watcher; the usage-limit resume sweep re-delivers the pending
+  # wake and the next turn end re-arms supervision through the harness protocol.
+  outage_desc=$(fm_limit_park_outage_describe "$STATE")
+  episode_key="usage-limit-park:$FM_LIMIT_OUTAGE_FROM"
+  print_full_banner=0
+  if [ "$READ_ONLY" -eq 1 ]; then
+    fm_guard_stale_banner_seen "$STATE" "$episode_key" || print_full_banner=1
+  elif fm_guard_claim_stale_banner "$STATE" "$episode_key"; then
+    print_full_banner=1
+  fi
+  if [ "$print_full_banner" -eq 1 ]; then
+    rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+    {
+      printf '●%s\n' "$rule"
+      printf '●  SUPERVISION WAS PARKED ON THE CLAUDE USAGE LIMIT - NOT A LAPSED WATCHER\n'
+      printf '●  This session was %s.\n' "$outage_desc"
+      printf '●  The watcher beacon went stale (last beat: %s) because the limit refused every turn,\n' "$beacon_desc"
+      printf '●  including the rewake that would have re-armed it. Pending wakes stayed durable.\n'
+      printf '●  Drain the queue (bin/fm-wake-drain.sh), resume any parked worker the resume sweep has not,\n'
+      printf '●  and continue; the next turn end re-arms supervision through the harness protocol.\n'
+      printf '●  %s\n' "$CONTINUE_LINE"
+      printf '●%s\n' "$rule"
+    } >&2
+  else
+    printf 'NOTE: supervision still parked on the usage limit (%s; last beat: %s) - full notice already printed this episode.\n' \
+      "$outage_desc" "$beacon_desc" >&2
+  fi
+elif [ "$watcher_healthy" = false ]; then
   episode_key=$(fm_guard_stale_episode_key "$watcher_down_reason")
   episode_key=${episode_key%$'\n'}
   print_full_banner=0
@@ -225,8 +260,12 @@ if [ "$watcher_healthy" = false ]; then
   fi
 else
   # Healthy again while work is still in flight: end the episode so a later
-  # restale re-prints the full banner.
-  [ "$READ_ONLY" -eq 1 ] || fm_guard_clear_stale_banner
+  # restale re-prints the full banner, and retire any usage-limit outage record
+  # so a later genuine lapse is not softened by an old park.
+  if [ "$READ_ONLY" -ne 1 ]; then
+    fm_guard_clear_stale_banner
+    fm_limit_park_outage_clear "$STATE"
+  fi
 fi
 
 # Queued wakes are an independent hazard; warn whenever they are pending, even if

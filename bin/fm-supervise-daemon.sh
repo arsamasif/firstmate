@@ -185,6 +185,15 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # (fm_busy_classify).
 # shellcheck source=bin/fm-busy-lib.sh
 . "$FM_DAEMON_DIR/fm-busy-lib.sh"
+# The guarded primary-pane injection path (target, busy, composer, submit) is
+# shared with the usage-window reset delivery; bin/fm-primary-inject-lib.sh owns
+# the guard order so the two producers can never drift apart.
+# shellcheck source=bin/fm-primary-inject-lib.sh
+. "$FM_DAEMON_DIR/fm-primary-inject-lib.sh"
+# Usage-limit park records (bin/fm-limit-park-lib.sh) are declared external
+# waits for the stale classifier below, exactly like a paused: status line.
+# shellcheck source=bin/fm-limit-park-lib.sh
+. "$FM_DAEMON_DIR/fm-limit-park-lib.sh"
 
 # --- tunables ---------------------------------------------------------------
 # Supervisor backends this daemon knows how to inject into today. zellij, orca,
@@ -378,6 +387,14 @@ classify_stale() {  # <window> <state>
   local win=$1 state=$2 task last seen
   task=$(window_to_task "$win" "$state")
   last=$(last_status_line "$state/$task.status")
+  if [ -n "$task" ] && fm_limit_park_active "$state" "$task"; then
+    # A usage-limit park (bin/fm-limit-park-lib.sh) is a declared external
+    # wait the worker could not append itself: the account window refused the
+    # turn. Same pause routing as a paused: line; the tokenless resume owner
+    # (bin/fm-limit-resume.sh) clears it after the reset, never this daemon.
+    printf 'pause|%s: %s' "$(fm_limit_park_describe "$state" "$task")" "$win"
+    return
+  fi
   if [ -n "$last" ] && status_is_paused_or_captain_held "$last"; then
     # A DECLARED external-wait pause or a verified captain-held transfer
     # (fm-classify-lib.sh owns which declarations qualify): an idle pane is
@@ -593,15 +610,16 @@ fm_daemon_primary_harness() {
 }
 
 pane_is_busy() {  # <target> [backend]
-  local target=$1 backend=${2:-tmux} native tail40 harness
-  harness=$(fm_daemon_primary_harness)
-  native=$(fm_backend_busy_state "$backend" "$target" 2>/dev/null)
-  case "$native" in
-    busy) return 0 ;;
-  esac
-  tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || return 1
-  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12 \
-    | fm_busy_lines_match "$harness"
+  local target=$1 backend=${2:-tmux}
+  fm_primary_pane_is_busy "$backend" "$target" "$(fm_daemon_primary_harness)"
+}
+
+# The shared injection guard consults this daemon's own pane_is_busy (harness
+# from fm_daemon_primary_harness; the unit tests stub it) rather than the
+# library default, so the guard order stays shared while the busy predicate
+# stays the daemon's.
+fm_primary_inject_busy() {  # <backend> <target> <harness>
+  pane_is_busy "$2" "$1"
 }
 
 # pane_input_pending dispatches through fm_backend_composer_state and treats
@@ -1021,6 +1039,12 @@ housekeeping() {  # <state>
       reconcile_pause_tracking "$win" "$state" "$last"
       continue
     fi
+    if fm_limit_park_active "$state" "$task"; then
+      # Parked on the usage limit: a declared wait, never a wedge suspect.
+      stale_marker_remove "$win" "$state"
+      pause_marker_record "$win" "$state"
+      continue
+    fi
     age=$(( now - $(cat "$marker" 2>/dev/null || echo "$now") ))
     [ "$age" -ge "${FM_STALE_ESCALATE_SECS:-$STALE_ESCALATE_SECS_DEFAULT}" ] || continue
     stale_window_is_busy "$win" "$state"
@@ -1057,7 +1081,8 @@ housekeeping() {  # <state>
     fi
     task=$(window_to_task "$win" "$state")
     last=$(last_status_line "$state/$task.status")
-    if [ -z "$last" ] || ! status_is_paused_or_captain_held "$last"; then
+    if { [ -z "$last" ] || ! status_is_paused_or_captain_held "$last"; } \
+      && ! fm_limit_park_active "$state" "$task"; then
       reconcile_pause_tracking "$win" "$state" "$last"
       continue
     fi
@@ -1074,7 +1099,10 @@ housekeeping() {  # <state>
       2) rm -f "$marker" ;;
       *)
         last=$(last_status_line "$state/$task.status")
-        if [ -n "$last" ] && status_is_captain_held "$last"; then
+        if fm_limit_park_active "$state" "$task"; then
+          escalate_add "$state" "$(fm_limit_park_describe "$state" "$task") for ${age}s (no action needed unless the reset has passed without a resume): $win"
+          _now > "$marker"
+        elif [ -n "$last" ] && status_is_captain_held "$last"; then
           escalate_add "$state" "captain-held ${age}s (awaiting the captain, answer the held decision or release the hold): $win"
           _now > "$marker"
         elif [ -n "$last" ] && status_is_paused "$last"; then
@@ -1142,7 +1170,7 @@ window_for_task() {  # <task-key> [state]
 #     line, or a previous injection's unsent text), defer entirely - injecting
 #     would merge with the human's text.
 inject_msg() {  # <message> [state]
-  local msg=$1 state target backend retries sleep_s verdict composer encoded
+  local msg=$1 state target backend retries sleep_s verdict encoded
   state="${2:-$(_state_root)}"
   # (1) Presence-gate: inject ONLY when afk is active. When afk is off, the
   # daemon self-handles and stays quiet; firstmate drives the normal always-on
@@ -1156,46 +1184,27 @@ inject_msg() {  # <message> [state]
   fm_operational_input_encode away-supervisor "$msg" encoded || return 1
   msg=$encoded
   target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
-  # BACKEND-AWARE (previously a raw `tmux display-message` pane-exists probe):
-  # dispatches through bin/fm-backend.sh so a herdr supervisor pane is checked
-  # via the herdr adapter instead of always assuming tmux. Falls back to tmux
-  # when unset (sourced/test contexts that never ran fm_super_main's startup
-  # discovery), matching this function's pre-existing default assumption.
+  # BACKEND-AWARE: dispatches through bin/fm-backend.sh so a herdr supervisor
+  # pane is checked via the herdr adapter instead of always assuming tmux. Falls
+  # back to tmux when unset (sourced/test contexts that never ran
+  # fm_super_main's startup discovery), matching this function's pre-existing
+  # default assumption.
   backend="${FM_SUPERVISOR_BACKEND:-tmux}"
-  fm_backend_target_exists "$backend" "$target" || return 1
-  # (3) Busy-guard: never inject into an in-use supervisor pane.
-  if pane_is_busy "$target" "$backend"; then
-    log "inject deferred: supervisor pane busy (agent mid-turn)"
-    return 1
-  fi
-  #   b) Composer-guard: inject ONLY into a confirmed-empty GENUINE agent
-  #      composer. The shared classifier (fm_backend_composer_state ->
-  #      fm_composer_classify_content, bin/fm-composer-lib.sh) reports 'pending'
-  #      for real unsubmitted text (a human's half-typed line, or a swallowed
-  #      prior injection) and 'unknown' for a bare dead-shell prompt (the agent
-  #      exited to its login shell) or an unreadable pane. Neither is a safe
-  #      target - typing the escalation into a shell could execute it - so defer
-  #      on anything that is not affirmatively 'empty'. A deferred escalation
-  #      stays buffered for the next cycle or the catch-up flush.
-  composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)
-  if [ "$composer" != empty ]; then
-    log "inject deferred: supervisor composer not confirmed-empty (state=${composer:-unknown}: pending input, dead-shell prompt, or unreadable pane)"
-    return 1
-  fi
-  # (4) Type the digest ONCE, then submit with Enter (retry Enter only, never
-  # retype) via the shared submit primitive. Success = the backend confirms
-  # submit. An unconfirmed/unknown pane does NOT count as delivered, so the
-  # buffer is preserved (strict) rather than cleared.
-  # Dispatches through fm_backend_send_text_submit (bin/fm-backend.sh): for
-  # backend=tmux this calls fm_backend_tmux_send_text_submit, a verbatim
-  # re-export of fm_tmux_submit_core - byte-identical to calling it directly.
+  # (3) The guarded delivery itself - pane existence, the busy guard, the
+  # confirmed-empty composer guard, then type ONCE and retry only Enter - is the
+  # shared fm_primary_inject_guarded (bin/fm-primary-inject-lib.sh); its header
+  # owns why each guard exists. An unconfirmed submit does NOT count as
+  # delivered, so the buffer is preserved (strict) rather than cleared.
   retries=${FM_INJECT_CONFIRM_RETRIES:-$INJECT_CONFIRM_RETRIES_DEFAULT}
   sleep_s=${FM_INJECT_CONFIRM_SLEEP:-$INJECT_CONFIRM_SLEEP_DEFAULT}
-  verdict=$(fm_backend_send_text_submit "$backend" "$target" "$msg" "$retries" "$sleep_s" "$sleep_s")
-  if [ "$verdict" = empty ]; then
-    return 0  # Backend confirmed the submit.
-  fi
-  log "inject failed: submit unconfirmed after $retries retries (verdict=$verdict, text may be in composer)"
+  verdict=$(fm_primary_inject_guarded "$backend" "$target" "$(fm_daemon_primary_harness)" "$msg" "$retries" "$sleep_s" "$sleep_s")
+  case "$verdict" in
+    submitted) return 0 ;;
+    target-gone) return 1 ;;
+    busy) log "inject deferred: supervisor pane busy (agent mid-turn)" ;;
+    composer:*) log "inject deferred: supervisor composer not confirmed-empty (state=${verdict#composer:}: pending input, dead-shell prompt, or unreadable pane)" ;;
+    *) log "inject failed: submit unconfirmed after $retries retries (verdict=${verdict#unconfirmed:}, text may be in composer)" ;;
+  esac
   return 1
 }
 

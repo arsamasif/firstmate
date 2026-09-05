@@ -352,6 +352,105 @@ fm_busy_lines_match() {  # [harness]
   [ -n "$regex" ] && printf '%s' "$lines" | grep -qiE "$regex"
 }
 
+# --- Claude usage-limit banner (task fm-usage-limit-resume, 2026-09-04) -----
+# Claude Code parks a session on the account's five-hour usage window with a
+# rendered banner, live-captured verbatim on 2026-09-04 (Claude Code 2.1.261 was
+# the installed build when the shape was recorded on 2026-09-05):
+#
+#   You've hit your session limit · resets 9pm (America/New_York)
+#   /upgrade or /usage-credits to finish what you're working on.
+#   ...
+#   ⚠ /low-priority to continue now at lower priority · uses your weekly limit
+#
+# The banner is a DECLARED EXTERNAL WAIT, not a wedge: every Claude worker on
+# the account parks within the same minute, no turn can run until the window
+# resets, and nothing about the worker itself is stuck. fm_composer_claude_usage_limit
+# is the ONE owner of that shape, following the same rule as every other shape
+# here: an adapter captures a screen and this file classifies it. Two
+# independent rendered signals carry a positive verdict on their own, so no
+# single vendor string is load-bearing: the "hit your ... limit" headline
+# (session or usage wording), and the "/low-priority to continue now" hint that
+# Claude draws only while parked. The reset phrase is parsed OUT of the headline
+# when present and reported raw ("9pm (America/New_York)"); turning it into an
+# epoch is the record owner's job (bin/fm-limit-park-lib.sh), because that
+# needs a clock and a time zone this classifier deliberately does not read.
+# Styling is stripped first so a styled capture (tmux -e) classifies exactly
+# like a plain one. Both signals are matched case-insensitively, and only
+# within the last 12 non-blank rows of the capture, the same tail window every
+# other shape here reads. This function reports the SCREEN SIGNAL only: a
+# worker that merely displays the banner text (reading this file, grepping for
+# the hint) shows it too, so deciding whether a park is real is the record
+# owner's job - bin/fm-limit-park-lib.sh corroborates the signal against the
+# live quota window before it opens a park record, and states that contract.
+#
+# The verdict names the WINDOW the park is on: `five_hour` for the session,
+# usage, and five-hour headlines and for the hint alone; `weekly` for the
+# weekly-limit headline, which is a different window with its own reset that
+# bin/fm-limit-resume.sh does not own (a weekly park is still a declared wait,
+# never a wedge, but it is never resumed by the five-hour sweep). The weekly
+# headline is therefore NOT in the five-hour headline set.
+#
+# The banner is never matched against a busy pane: when that same tail window
+# carries Claude's delivery busy footer (fm_busy_lines_match claude, the same
+# signature every submit acknowledgement reads), the worker is mid-turn and a
+# headline still on screen is history, not a park.
+FM_COMPOSER_CLAUDE_LIMIT_HEADLINE_RE="hit your (session|usage|(five|5)[- ]hour) limit"
+FM_COMPOSER_CLAUDE_LIMIT_WEEKLY_RE="hit your weekly limit"
+FM_COMPOSER_CLAUDE_LIMIT_HINT_RE='/low-priority to continue now'
+FM_COMPOSER_CLAUDE_LIMIT_RESET_RE='resets? (at )?([0-9]{1,2}(:[0-9]{2})?[[:space:]]*(am|pm)?([[:space:]]*\([A-Za-z_/+-]+\))?)'
+
+# fm_composer_claude_usage_limit <screen-text> [<reset-var>] [<banner-var>] [<window-var>] [<named-var>]
+# 0 when the last 12 non-blank rows show Claude's usage-limit banner on an idle pane;
+# <reset-var> receives the raw reset phrase after "resets" (empty when the
+# headline carries none), <banner-var> the matched headline or hint line, plain
+# text, single line, and <window-var> `five_hour` or `weekly`.
+# <named-var> receives 1 when a HEADLINE named that window and 0 when only the
+# hint matched, because the hint carries no window of its own and <window-var>
+# then falls back to `five_hour` rather than reporting evidence. A caller that
+# corroborates the verdict against a live quota window must read this: treating
+# an unnamed window as five_hour refuses a genuine weekly park whenever the
+# five-hour window is healthy (bin/fm-limit-park-lib.sh owns that rule).
+# 1 when no signal matches inside that window or it shows the busy footer.
+fm_composer_claude_usage_limit() {  # <screen> [<reset-var>] [<banner-var>] [<window-var>] [<named-var>]
+  local __fmcl_screen=${1-} __fmcl_reset_var=${2-} __fmcl_banner_var=${3-} __fmcl_window_var=${4-} __fmcl_named_var=${5-}
+  local __fmcl_plain __fmcl_tail __fmcl_line __fmcl_headline='' __fmcl_hint='' __fmcl_reset='' __fmcl_window=five_hour
+  __fmcl_plain=$(printf '%s\n' "$__fmcl_screen" | fm_composer_strip_ansi)
+  __fmcl_tail=$(printf '%s\n' "$__fmcl_plain" | grep -v '^[[:space:]]*$' | tail -12)
+  __fmcl_headline=$(printf '%s\n' "$__fmcl_tail" \
+    | LC_ALL=C grep -m1 -iE "$FM_COMPOSER_CLAUDE_LIMIT_HEADLINE_RE|$FM_COMPOSER_CLAUDE_LIMIT_WEEKLY_RE") || __fmcl_headline=''
+  __fmcl_hint=$(printf '%s\n' "$__fmcl_tail" | LC_ALL=C grep -m1 -iF "$FM_COMPOSER_CLAUDE_LIMIT_HINT_RE") || __fmcl_hint=''
+  [ -n "$__fmcl_headline" ] || [ -n "$__fmcl_hint" ] || return 1
+  if printf '%s\n' "$__fmcl_tail" | fm_busy_lines_match claude; then
+    return 1
+  fi
+  if [ -n "$__fmcl_headline" ]; then
+    if printf '%s' "$__fmcl_headline" | LC_ALL=C grep -qiE "$FM_COMPOSER_CLAUDE_LIMIT_WEEKLY_RE"; then
+      __fmcl_window=weekly
+    fi
+    __fmcl_reset=$(printf '%s' "$__fmcl_headline" | LC_ALL=C grep -oiE "$FM_COMPOSER_CLAUDE_LIMIT_RESET_RE" | head -1)
+    __fmcl_reset=${__fmcl_reset#[Rr]eset}
+    __fmcl_reset=${__fmcl_reset#s}
+    __fmcl_reset=${__fmcl_reset# }
+    __fmcl_reset=${__fmcl_reset#at }
+    fm_composer_normalize_trim_var __fmcl_reset
+  fi
+  [ -z "$__fmcl_reset_var" ] || printf -v "$__fmcl_reset_var" '%s' "$__fmcl_reset"
+  if [ -n "$__fmcl_banner_var" ]; then
+    __fmcl_line=${__fmcl_headline:-$__fmcl_hint}
+    fm_composer_normalize_trim_var __fmcl_line
+    printf -v "$__fmcl_banner_var" '%s' "$__fmcl_line"
+  fi
+  [ -z "$__fmcl_window_var" ] || printf -v "$__fmcl_window_var" '%s' "$__fmcl_window"
+  if [ -n "$__fmcl_named_var" ]; then
+    if [ -n "$__fmcl_headline" ]; then
+      printf -v "$__fmcl_named_var" '%s' 1
+    else
+      printf -v "$__fmcl_named_var" '%s' 0
+    fi
+  fi
+  return 0
+}
+
 # The prompt glyphs, each declared exactly once (see THE SAFETY RULE above).
 # AGENT glyphs are a genuine empty agent composer on any row, bordered or bare.
 # SHELL glyphs are one only INSIDE a composer container; on a bare row they are

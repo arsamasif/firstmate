@@ -11,7 +11,7 @@ The shared orchestrator behavior lives in [`AGENTS.md`](../AGENTS.md) - edit it 
 This section is the single owner of the top-level operational-home layout; producer script headers and their help own exact child-file fields and mutation contracts.
 The tracked code root contains the shared instruction, skill, documentation, workflow, and `bin/` surfaces, while each effective `FM_HOME` contains private operational directories.
 `data/` holds durable private fleet records such as the project and secondmate registries, captain preferences, optional shared captain preferences, learnings, backlog, briefs, and scout reports.
-`state/` holds runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, inactive terminal-outcome receipts under `state/terminal-outcomes/`, away-mode state, generated Relay artifacts, private secondmate config-reread generations with their retry and quarantine state, per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`), and parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
+`state/` holds runtime records such as task metadata, append-only status events, endpoint signals, watcher and wake-queue coordination, inactive terminal-outcome receipts under `state/terminal-outcomes/`, away-mode state, generated Relay artifacts, private secondmate config-reread generations with their retry and quarantine state, per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`), parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`), and the usage-limit park records, resume receipts, primary-pane record, and outage record owned by `bin/fm-limit-park-lib.sh` (see "Usage-limit resume" below).
 `config/` holds local gitignored operating choices, and `projects/` holds the local project clones that Firstmate reads but changes only through the narrow guarded and concrete captain-approved exceptions in `AGENTS.md`.
 Untracked files and directories whose names begin with `scratchpad` are also gitignored, so temporary scratch does not make porcelain-based secondmate sync guards treat a home as dirty.
 
@@ -456,6 +456,21 @@ The sweep must finish inside `FM_CHECK_TIMEOUT` (default 30), because a run the 
 So a budget larger than that timeout allows is cut down to what fits instead of being refused, and the cut is reported in the report line.
 A budget that is not a whole number from 1 to 120 is still refused outright.
 
+## Usage-limit resume (config/limit-resume)
+
+Every Claude worker and a Claude primary share one account usage window, so when it is exhausted they all park within the same minute on Claude Code's rendered usage-limit banner, and the primary's own tokenless rewake is refused along with everything else.
+`bin/fm-limit-resume.sh` is the tokenless owner that resumes that work by itself after the window resets; its header owns the exact sweep, the banner-versus-`quota-axi` reset cross-check, the one-steer-per-episode rule, the guarded primary delivery, and the scheduler entry.
+Arm it once per home with `bin/fm-limit-resume.sh install`, which prefers a systemd user timer and falls back to the user crontab, is idempotent, and never leaves two entries; `uninstall` removes it and `status` reports it.
+Session start reports the arming as one `BOOTSTRAP_INFO:` fact, or an actionable `LIMIT_RESUME:` line when the sweep is not armed or when the primary session is not running in a pane the sweep can reach.
+A primary launched inside tmux (or herdr) receives one `usage-window-reset` operational input after the reset; a primary launched outside any reachable pane still has its workers resumed and finds a durable `check: usage-window-reset` wake on its next turn, which is why the README recommends launching firstmate inside tmux.
+`config/limit-resume` containing `off` makes the sweep a no-op and silences both bootstrap lines; it is local, gitignored, and not inherited.
+The sweep owns the five-hour window only: a banner naming the weekly limit is recorded as a declared wait whose record says it is not resumed automatically, and it is never steered.
+A banner headline left above Claude's live busy footer is a worker mid-turn, not a park, so the classifier refuses the parked verdict there.
+The rendered banner is only a screen signal, so a park record opens only once `quota-axi` corroborates it: a banner headline names its window and is judged on that row alone (five-hour, or the seven-day row for a weekly headline), while a capture carrying only the `/low-priority` hint names no window and is refused only when the five-hour and seven-day rows both have more than `FM_LIMIT_PARK_CORROBORATE_MAX_PCT` remaining.
+An unreadable `quota-axi` or a missing row still admits the park, and a refusal writes nothing, so the next sweep opens a real park as soon as the live window agrees.
+A worker that keeps rendering the same banner after its reconciled reset has passed has its record re-reconciled against `quota-axi` at most once per `FM_LIMIT_PARK_RECHECK_SECS`, and a live window that still reads exhausted with a later reset starts a new park episode with its own single steer.
+While a park is recorded, a parked worker is a declared external wait for the watcher, the away-mode daemon, and `bin/fm-crew-state.sh` (state `paused` with the reset time), never a wedge, and a stale watcher beacon inside the recorded outage window is described by `bin/fm-guard.sh` as parked on the usage limit rather than as a lapsed watcher; [`watcher-continuity.md`](watcher-continuity.md#usage-limit-outage) owns that contract.
+
 ## Relay (.env)
 
 Relay lets a firstmate instance answer public mentions and act on normal reversible mention requests through firstmate's normal lifecycle.
@@ -752,6 +767,13 @@ FM_SIGNAL_GRACE=30      # seconds to coalesce nearby status and turn-end signals
 FM_CAPTAIN_RE='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'   # captain-relevant status regex; nonterminal progress verbs remain excluded even when their prose matches
 FM_CLASSIFY_PAUSED_VERB=paused     # leading status verb for a declared external wait; excluded from FM_CAPTAIN_RE and distinct from blocked
 FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stale pane escalates; stale panes whose crew is not provably working surface immediately unless they declare the pause verb
+FM_LIMIT_RESUME_MIN_PCT=40         # quota-axi five_hour percentRemaining at which the window reads healthy: the usage-limit resume sweep's steer floor after the reset and the park record's re-reconcile floor (bin/fm-limit-park-lib.sh)
+FM_LIMIT_RESUME_MIN_GAP_SECS=1800  # backstop spacing between two resume steers to one task, on top of the one-per-episode receipt
+FM_LIMIT_RESUME_SCHEDULER=         # systemd|cron override for bin/fm-limit-resume.sh install; unset prefers a running systemd user manager, then crontab
+FM_LIMIT_QUOTA_TIMEOUT_SECS=15     # bound on each quota-axi read the park record owner makes (bin/fm-limit-park-lib.sh)
+FM_LIMIT_PARK_RECHECK_SECS=300     # floor between two quota-axi re-reads for one park record whose reconciled reset has passed while its banner stayed (bin/fm-limit-park-lib.sh)
+FM_LIMIT_PARK_CORROBORATE_MAX_PCT=5 # quota-axi percentRemaining at or below which a checked window corroborates a rendered banner, so a park record may be opened; a headline is judged on the window it names and a hint-only banner on both windows; an unreadable quota-axi or a missing row still admits the park (bin/fm-limit-park-lib.sh)
+FM_LIMIT_OUTAGE_GRACE_SECS=3600    # how long past its reset a recorded usage-limit outage still explains a stale watcher beacon to bin/fm-guard.sh
 FM_BUSY_TURN_MAX_SECS=3600         # maximum age of a busy pane's latest state/<id>.turn-ended marker, or its state/<id>.meta spawn record before any turn completes, before the same wedge escalation used for a provably-working non-busy stale takes over; inspection-only, never an automatic interrupt or restart; a declared external wait or verified captain-held transfer takes the FM_PAUSE_RESURFACE_SECS recheck below instead
 FM_PAUSE_RESURFACE_SECS=3600       # seconds before the watcher re-surfaces a declared external wait or verified captain-held transfer for a recheck, including a live busy pane past FM_BUSY_TURN_MAX_SECS; the away-mode daemon uses the same setting for a declared external wait or verified captain-held transfer, ageing its window against the crew's own latest status line rather than pane busy state
 FM_SECONDMATE_WAKE_STALL_SECS=60   # minimum age of the oldest valid foreign wake-queue row before an endpoint-recorded local secondmate produces one durable parent wake-loop-stall notification; zero or invalid values use 60
