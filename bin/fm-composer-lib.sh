@@ -375,7 +375,12 @@ fm_busy_lines_match() {  # [harness]
 # epoch is the record owner's job (bin/fm-limit-park-lib.sh), because that
 # needs a clock and a time zone this classifier deliberately does not read.
 # Styling is stripped first so a styled capture (tmux -e) classifies exactly
-# like a plain one. Matched case-insensitively against the plain text.
+# like a plain one. Both signals are matched case-insensitively, and ONLY
+# within the last 12 non-blank rows of the capture: the banner Claude draws
+# over a parked composer sits at the pane tail, while the same words quoted in
+# a transcript above a live prompt are displayed content, which this file never
+# lets drive a pane verdict (the rule bin/fm-watch.sh states inline for busy
+# strings). Every other shape here reads the same tail window.
 #
 # The verdict names the WINDOW the park is on: `five_hour` for the session,
 # usage, and five-hour headlines and for the hint alone; `weekly` for the
@@ -384,30 +389,31 @@ fm_busy_lines_match() {  # [harness]
 # never a wedge, but it is never resumed by the five-hour sweep). The weekly
 # headline is therefore NOT in the five-hour headline set.
 #
-# The banner is never matched against a busy pane: when the last 12 non-blank
-# rows carry Claude's delivery busy footer (fm_busy_lines_match claude, the
-# same signature every submit acknowledgement reads), the worker is mid-turn
-# and a headline still scrolled in its transcript is history, not a park.
+# The banner is never matched against a busy pane: when that same tail window
+# carries Claude's delivery busy footer (fm_busy_lines_match claude, the same
+# signature every submit acknowledgement reads), the worker is mid-turn and a
+# headline still on screen is history, not a park.
 FM_COMPOSER_CLAUDE_LIMIT_HEADLINE_RE="hit your (session|usage|(five|5)[- ]hour) limit"
 FM_COMPOSER_CLAUDE_LIMIT_WEEKLY_RE="hit your weekly limit"
 FM_COMPOSER_CLAUDE_LIMIT_HINT_RE='/low-priority to continue now'
 FM_COMPOSER_CLAUDE_LIMIT_RESET_RE='resets? (at )?([0-9]{1,2}(:[0-9]{2})?[[:space:]]*(am|pm)?([[:space:]]*\([A-Za-z_/+-]+\))?)'
 
 # fm_composer_claude_usage_limit <screen-text> [<reset-var>] [<banner-var>] [<window-var>]
-# 0 when the screen shows Claude's usage-limit banner on an idle pane;
+# 0 when the last 12 non-blank rows show Claude's usage-limit banner on an idle pane;
 # <reset-var> receives the raw reset phrase after "resets" (empty when the
 # headline carries none), <banner-var> the matched headline or hint line, plain
 # text, single line, and <window-var> `five_hour` or `weekly`.
-# 1 when no signal matches or the pane's tail shows the busy footer.
+# 1 when no signal matches inside that window or it shows the busy footer.
 fm_composer_claude_usage_limit() {  # <screen> [<reset-var>] [<banner-var>] [<window-var>]
   local __fmcl_screen=${1-} __fmcl_reset_var=${2-} __fmcl_banner_var=${3-} __fmcl_window_var=${4-}
-  local __fmcl_plain __fmcl_line __fmcl_headline='' __fmcl_hint='' __fmcl_reset='' __fmcl_window=five_hour
+  local __fmcl_plain __fmcl_tail __fmcl_line __fmcl_headline='' __fmcl_hint='' __fmcl_reset='' __fmcl_window=five_hour
   __fmcl_plain=$(printf '%s\n' "$__fmcl_screen" | fm_composer_strip_ansi)
-  __fmcl_headline=$(printf '%s\n' "$__fmcl_plain" \
+  __fmcl_tail=$(printf '%s\n' "$__fmcl_plain" | grep -v '^[[:space:]]*$' | tail -12)
+  __fmcl_headline=$(printf '%s\n' "$__fmcl_tail" \
     | LC_ALL=C grep -m1 -iE "$FM_COMPOSER_CLAUDE_LIMIT_HEADLINE_RE|$FM_COMPOSER_CLAUDE_LIMIT_WEEKLY_RE") || __fmcl_headline=''
-  __fmcl_hint=$(printf '%s\n' "$__fmcl_plain" | LC_ALL=C grep -m1 -iF "$FM_COMPOSER_CLAUDE_LIMIT_HINT_RE") || __fmcl_hint=''
+  __fmcl_hint=$(printf '%s\n' "$__fmcl_tail" | LC_ALL=C grep -m1 -iF "$FM_COMPOSER_CLAUDE_LIMIT_HINT_RE") || __fmcl_hint=''
   [ -n "$__fmcl_headline" ] || [ -n "$__fmcl_hint" ] || return 1
-  if printf '%s\n' "$__fmcl_plain" | grep -v '^[[:space:]]*$' | tail -12 | fm_busy_lines_match claude; then
+  if printf '%s\n' "$__fmcl_tail" | fm_busy_lines_match claude; then
     return 1
   fi
   if [ -n "$__fmcl_headline" ]; then

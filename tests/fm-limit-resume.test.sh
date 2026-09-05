@@ -64,6 +64,33 @@ BUSY_AFTER_BANNER_PANE=$(cat <<'EOF'
   ✻ Thinking… (12s · esc to interrupt)
 EOF
 )
+# The banner quoted back as file content in a transcript, followed by enough
+# ordinary work that it sits outside the pane tail, ending at a live prompt:
+# displayed content on an idle worker, not a park.
+BANNER_IN_TRANSCRIPT_PANE=$(cat <<'EOF'
+  ⏺ Read(bin/fm-composer-lib.sh)
+
+  #   You've hit your session limit · resets 9pm (America/New_York)
+  #   /upgrade or /usage-credits to finish what you're working on.
+  #   ⚠ /low-priority to continue now at lower priority · uses your weekly limit
+
+  ⏺ Done reading the classifier.
+  ⏺ Read(bin/fm-limit-park-lib.sh)
+  ⏺ Read(bin/fm-limit-resume.sh)
+  ⏺ Read(bin/fm-watch.sh)
+  ⏺ Read(bin/fm-crew-state.sh)
+  ⏺ Read(bin/fm-guard.sh)
+  ⏺ Read(tests/fm-limit-resume.test.sh)
+  ⏺ Read(docs/watcher-continuity.md)
+  ⏺ Read(AGENTS.md)
+  ⏺ Wrote the note into the brief.
+  ⏺ Nothing else to do here.
+
+  ─────────────────────────────────────────────────────────────
+
+  ❯
+EOF
+)
 # The weekly window's headline in the same idle pane: a declared wait this
 # feature does not resume.
 WEEKLY_PANE=$(cat <<'EOF'
@@ -231,6 +258,17 @@ test_pane_without_banner_is_not_parked() {
   ! fm_composer_claude_usage_limit 'the session limit is generous today' reset \
     || fail "prose mentioning the limit classified as parked"
   pass "fm_composer_claude_usage_limit: the banner-free pane, a busy footer, a headline above a busy footer, and prose are not parked"
+}
+
+test_banner_outside_the_pane_tail_is_not_parked() {
+  local reset='' banner='' window=''
+  ! fm_composer_claude_usage_limit "$BANNER_IN_TRANSCRIPT_PANE" reset banner window \
+    || fail "banner text scrolled above the pane tail classified as parked: banner='$banner' reset='$reset'"
+  fm_composer_claude_usage_limit "$PARKED_PANE" reset banner window \
+    || fail "the live banner fixture stopped classifying as parked"
+  [ "$reset" = "9pm (America/New_York)" ] || fail "the live fixture's reset phrase changed: '$reset'"
+  [ "$window" = five_hour ] || fail "the live fixture's window changed: '$window'"
+  pass "fm_composer_claude_usage_limit: the banner counts only inside the pane tail, and the live fixture still parks"
 }
 
 test_reset_phrase_parses_to_next_wall_clock() {
@@ -602,7 +640,7 @@ test_bootstrap_lines_leaves_a_stateless_home_untouched() {
 # --- 6. install/uninstall: idempotent, one entry ------------------------------
 
 test_install_cron_is_idempotent() {
-  local home dir n out
+  local home dir n out sib
   home=$(make_home install-cron); dir=$(dirname "$home")
   printf '0 6 * * * /usr/bin/true # unrelated\n' > "$dir/crontab.txt"
   run_resume "$home" install --scheduler cron >/dev/null || fail "first install failed"
@@ -620,7 +658,21 @@ test_install_cron_is_idempotent() {
   ! grep -q 'firstmate-limit-resume' "$dir/crontab.txt" || fail "uninstall left the entry"
   grep -q 'unrelated' "$dir/crontab.txt" || fail "uninstall removed the unrelated line"
   run_resume "$home" uninstall >/dev/null || fail "second uninstall failed"
-  pass "fm-limit-resume install --scheduler cron: two installs leave one tagged entry, foreign lines survive, uninstall is idempotent"
+  # A neighbouring home whose path EXTENDS this one, sharing the same crontab:
+  # neither home may install, report, or uninstall over the other's entry.
+  sib="$home-sm"
+  mkdir -p "$sib/state" "$sib/config" "$sib/data"
+  run_resume "$sib" install --scheduler cron >/dev/null || fail "sibling home install failed"
+  run_resume "$home" install --scheduler cron >/dev/null || fail "install beside the sibling home failed"
+  n=$(grep -c 'firstmate-limit-resume home=' "$dir/crontab.txt")
+  [ "$n" = 2 ] || fail "installing beside the sibling home left $n entries, not both"
+  run_resume "$home" uninstall >/dev/null || fail "uninstall beside the sibling home failed"
+  out=$(run_resume "$sib" status)
+  case "$out" in *"armed (crontab entry)"*) ;; *) fail "uninstalling the shorter home disarmed the sibling: $out" ;; esac
+  out=$(run_resume "$home" status)
+  case "$out" in *"not armed"*) ;; *) fail "the shorter home read the sibling's entry as its own arming: $out" ;; esac
+  run_resume "$sib" uninstall >/dev/null || fail "sibling home uninstall failed"
+  pass "fm-limit-resume install --scheduler cron: two installs leave one tagged entry, foreign lines and a sibling home's entry survive, uninstall is idempotent"
 }
 
 test_install_systemd_is_idempotent() {
@@ -676,6 +728,7 @@ test_usage_window_reset_kind_is_registered_and_distinct() {
 
 test_banner_fixture_classifies_parked
 test_pane_without_banner_is_not_parked
+test_banner_outside_the_pane_tail_is_not_parked
 test_reset_phrase_parses_to_next_wall_clock
 test_observe_records_park_and_clears_when_banner_gone
 test_observe_trusts_later_quota_reset_and_says_so

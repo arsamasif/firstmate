@@ -359,6 +359,17 @@ unit_dir() {
 cron_tag() {
   printf '# firstmate-limit-resume home=%s' "$FM_HOME"
 }
+# The tag closes the crontab line, so it is matched as a SUFFIX and never as a
+# substring: one home's tag is a prefix of every home whose path extends it
+# (/home/u/fm inside /home/u/fm-sm), and an unanchored match would disarm the
+# other home on install and report it armed on status. Compared literally, so a
+# path holding regex metacharacters is matched as written.
+cron_tagged_lines() {  # <tag>; stdin -> this home's entries
+  awk -v tag="$1" 'length($0) >= length(tag) && substr($0, length($0) - length(tag) + 1) == tag'
+}
+cron_other_lines() {  # <tag>; stdin -> every line that is not this home's entry
+  awk -v tag="$1" 'length($0) < length(tag) || substr($0, length($0) - length(tag) + 1) != tag'
+}
 run_cmd() {
   printf 'FM_HOME=%q %q run' "$FM_HOME" "$SCRIPT_DIR/fm-limit-resume.sh"
 }
@@ -378,7 +389,7 @@ systemd_armed() {
 
 cron_armed() {
   command -v crontab >/dev/null 2>&1 || return 1
-  crontab -l 2>/dev/null | grep -qF "$(cron_tag)"
+  crontab -l 2>/dev/null | cron_tagged_lines "$(cron_tag)" | grep -q .
 }
 
 install_systemd() {
@@ -431,7 +442,7 @@ install_cron() {
   local existing tag line
   command -v crontab >/dev/null 2>&1 || { echo "error: crontab is not available" >&2; return 1; }
   tag=$(cron_tag)
-  existing=$(crontab -l 2>/dev/null | grep -vF "$tag" || true)
+  existing=$(crontab -l 2>/dev/null | cron_other_lines "$tag" || true)
   line="*/5 * * * * PATH=$PATH $(run_cmd) >/dev/null 2>&1 $tag"
   if [ -n "$existing" ]; then
     printf '%s\n%s\n' "$existing" "$line" | crontab - || return 1
@@ -445,8 +456,8 @@ uninstall_cron() {
   local existing tag
   command -v crontab >/dev/null 2>&1 || return 0
   tag=$(cron_tag)
-  crontab -l 2>/dev/null | grep -qF "$tag" || return 0
-  existing=$(crontab -l 2>/dev/null | grep -vF "$tag" || true)
+  crontab -l 2>/dev/null | cron_tagged_lines "$tag" | grep -q . || return 0
+  existing=$(crontab -l 2>/dev/null | cron_other_lines "$tag" || true)
   if [ -n "$existing" ]; then
     printf '%s\n' "$existing" | crontab - || return 1
   else

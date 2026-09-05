@@ -509,6 +509,7 @@ Observed output:
 0.1.30
 ok - fm_composer_claude_usage_limit: the live banner fixture, styled or plain, classifies as parked with its reset phrase
 ok - fm_composer_claude_usage_limit: the banner-free pane, a busy footer, a headline above a busy footer, and prose are not parked
+ok - fm_composer_claude_usage_limit: the banner counts only inside the pane tail, and the live fixture still parks
 ok - fm_limit_park_parse_reset: zoned and local phrases resolve to the next such wall clock; garbage is refused
 ok - fm_limit_park_observe: writes the record with the later of banner and quota-axi, keeps the episode on refresh, clears when the banner is gone
 ok - fm_limit_park_observe: a later quota-axi reset wins over the banner and the note says which was trusted
@@ -524,7 +525,8 @@ ok - fm-limit-resume run: idle Claude tasks and non-Claude tasks are left alone
 ok - fm-limit-resume run: a parked, recorded primary receives exactly one guarded usage-window-reset input after the reset, plus one durable wake
 ok - fm-limit-resume run: the composer guard defers the primary input while the composer holds text, and retries next sweep
 ok - fm-limit-resume: an unreachable primary still gets its crews resumed, a durable wake, and the plain-language bootstrap line
-ok - fm-limit-resume install --scheduler cron: two installs leave one tagged entry, foreign lines survive, uninstall is idempotent
+ok - fm-limit-resume: bootstrap-lines leaves a home with no state directory untouched, while run refuses it
+ok - fm-limit-resume install --scheduler cron: two installs leave one tagged entry, foreign lines and a sibling home's entry survive, uninstall is idempotent
 ok - fm-limit-resume install --scheduler systemd: two installs leave one timer, and uninstall removes it
 ok - fm-guard: a stale beacon inside a recorded park window reads as parked on the usage limit; an expired record alarms as before
 ok - fm-operational-input: usage-window-reset is a registered kind distinct from a captain message and an away escalation
@@ -532,6 +534,7 @@ ok - fm-operational-input: usage-window-reset is a registered kind distinct from
 
 Observed guarantee: the parked pane is a declared external wait with its reset time everywhere the fleet reads one, exactly one resume steer per park episode leaves through `bin/fm-send.sh` after the reset with a healthy window, a same-banner refresh past its reset becomes a new episode only when the live window still reads exhausted with a later reset, a weekly park and a headline above a busy footer are never steered, a recorded primary receives one guarded `usage-window-reset` input, an unrecorded primary receives a durable wake plus the bootstrap line, two scheduler installs leave one entry, and a stale beacon inside a recorded park is described as parked rather than as a lapsed watcher.
 The live banner fixture and the same pane without it are the positive and negative controls, so the classifier cannot go vacuous.
+The banner is read only inside the pane tail: the same words quoted in a transcript above a live prompt are not a park, while the live fixture still is, and a home whose path extends another home's never installs, reports, or uninstalls over its neighbour's crontab entry.
 The rendered banner is a vendor surface; re-run `bin/fm-test-run.sh tests/fm-limit-resume.test.sh` after a Claude Code upgrade and refresh this record if the banner wording changes.
 
 ## Wedge-alarm channels
