@@ -142,12 +142,19 @@ beacon_age() {
 # --- quota (lazy, once per sweep) --------------------------------------------
 QUOTA_READ=0
 QUOTA_OK=0
+# The sweep's own copy of the five-hour reading: the record owner overwrites the
+# shared FM_LIMIT_QUOTA_* globals with whatever window it was asked about, and a
+# later observe of a weekly banner would otherwise decide a five-hour resume.
+QUOTA_PCT=
+QUOTA_RESETS_AT=
 quota_once() {
   [ "$QUOTA_READ" -eq 0 ] || return 0
   QUOTA_READ=1
   if fm_limit_park_quota_window; then
     QUOTA_OK=1
-    log "quota-axi five_hour: ${FM_LIMIT_QUOTA_PCT:-?}% remaining, resets $(fm_limit_park_fmt_epoch "${FM_LIMIT_QUOTA_RESETS_AT:-}")"
+    QUOTA_PCT=$FM_LIMIT_QUOTA_PCT
+    QUOTA_RESETS_AT=$FM_LIMIT_QUOTA_RESETS_AT
+    log "quota-axi five_hour: ${QUOTA_PCT:-?}% remaining, resets $(fm_limit_park_fmt_epoch "${QUOTA_RESETS_AT:-}")"
   else
     log "quota-axi five_hour window unavailable; trusting reset times alone this sweep"
   fi
@@ -165,7 +172,7 @@ window_ready() {  # <id>
   fi
   resets=$FM_LIMIT_PARK_RESETS_AT
   quota_once
-  [ "$QUOTA_OK" -eq 1 ] && pct=$FM_LIMIT_QUOTA_PCT
+  [ "$QUOTA_OK" -eq 1 ] && pct=$QUOTA_PCT
   if [ -n "$resets" ]; then
     if [ "$now" -lt "$resets" ]; then
       log "$id still parked until $(fm_limit_park_fmt_epoch "$resets") ($FM_LIMIT_PARK_RESET_SOURCE)"
@@ -174,8 +181,8 @@ window_ready() {  # <id>
   elif [ -z "$pct" ]; then
     log "$id parked with no reset time from the banner and no readable quota-axi window; waiting for either"
     return 1
-  elif [ "$pct" -lt "$MIN_PCT" ] && [ -n "$FM_LIMIT_QUOTA_RESETS_AT" ] && [ "$now" -lt "$FM_LIMIT_QUOTA_RESETS_AT" ]; then
-    log "$id still parked until $(fm_limit_park_fmt_epoch "$FM_LIMIT_QUOTA_RESETS_AT") (live quota, ${pct}% remaining)"
+  elif [ "$pct" -lt "$MIN_PCT" ] && [ -n "$QUOTA_RESETS_AT" ] && [ "$now" -lt "$QUOTA_RESETS_AT" ]; then
+    log "$id still parked until $(fm_limit_park_fmt_epoch "$QUOTA_RESETS_AT") (live quota, ${pct}% remaining)"
     return 1
   fi
   if [ -n "$pct" ] && [ "$pct" -lt "$MIN_PCT" ]; then

@@ -89,6 +89,45 @@ HINT_IN_TOOL_OUTPUT_PANE=$(cat <<'EOF'
   ❯
 EOF
 )
+# A crewmate reading this feature's own source: the banner text arrives as file
+# content, still at the tail of the capture taken right then.
+BANNER_QUOTE_HEAD=$(cat <<'EOF'
+  ⏺ Read(bin/fm-composer-lib.sh)
+    ⎿  Read 512 lines
+
+  #   You've hit your session limit · resets 9pm (America/New_York)
+  #   /upgrade or /usage-credits to finish what you're working on.
+  #   ⚠ /low-priority to continue now at lower priority · uses your weekly limit
+
+  ⏺ That is the shape the park classifier matches.
+EOF
+)
+# The same session an hour of ordinary work later: the quoted banner has
+# scrolled well above the pane tail and the worker is idle at its prompt.
+LONG_IDLE_PANE=$(printf '%s\n%s\n' "$BANNER_QUOTE_HEAD" "$(cat <<'EOF'
+
+  ⏺ Bash(bin/fm-test-run.sh tests/fm-composer-empty.test.sh)
+    ⎿  ok - fm_composer_state: a bordered composer with a caret reads empty
+       ok - fm_composer_state: a dead shell prompt never reads empty
+       FM_TEST_SUMMARY total=1 failed=0
+
+  ⏺ The two shapes still classify the same way after the edit.
+
+  ⏺ Edit(bin/fm-crew-state.sh)
+    ⎿  Updated 1 addition and 1 removal
+
+  ⏺ Grep(pattern: "pane_readable", path: "bin")
+    ⎿  Found 4 matches
+
+  ⏺ Committed the fixup on the review branch and pushed it.
+
+  ⏺ Waiting on the pipeline before the next step.
+
+  ─────────────────────────────────────────────────────────────
+
+  ❯
+EOF
+)")
 # The weekly window's headline in the same idle pane: a declared wait this
 # feature does not resume.
 WEEKLY_PANE=$(cat <<'EOF'
@@ -120,7 +159,16 @@ set -u
 case "${1:-}" in
   capture-pane)
     [ "${FM_FAKE_TMUX_MISSING:-0}" = 1 ] && exit 1
-    cat "${FM_FAKE_PANE_FILE:-/dev/null}"
+    tgt=
+    while [ $# -gt 0 ]; do
+      case "$1" in -t) tgt=${2:-}; shift 2 ;; *) shift ;; esac
+    done
+    per="${FM_FAKE_PANE_DIR:-}/${tgt##*fm-}.txt"
+    if [ -n "${FM_FAKE_PANE_DIR:-}" ] && [ -f "$per" ]; then
+      cat "$per"
+    else
+      cat "${FM_FAKE_PANE_FILE:-/dev/null}"
+    fi
     exit 0 ;;
   display-message)
     [ "${FM_FAKE_TMUX_MISSING:-0}" = 1 ] && exit 1
@@ -144,6 +192,10 @@ set -u
 [ "${FM_FAKE_QUOTA_ABSENT:-0}" = 1 ] && exit 1
 printf 'windows[1]{provider,id,label,percentRemaining,resetsAt,pace}:\n'
 printf '  claude,five_hour,session,%s,"%s",ahead\n' "${FM_FAKE_QUOTA_PCT:-90}" "${FM_FAKE_QUOTA_RESETS_AT:-2030-01-01T00:00:00+00:00}"
+if [ -n "${FM_FAKE_QUOTA_WEEKLY_PCT:-}" ]; then
+  printf '  claude,seven_day,weekly,%s,"%s",ahead\n' "$FM_FAKE_QUOTA_WEEKLY_PCT" "${FM_FAKE_QUOTA_WEEKLY_RESETS_AT:-2030-06-01T00:00:00+00:00}"
+fi
+exit 0
 SH
   cat > "$fb/crontab" <<'SH'
 #!/usr/bin/env bash
@@ -256,6 +308,18 @@ test_pane_without_banner_is_not_parked() {
   ! fm_composer_claude_usage_limit 'the session limit is generous today' reset \
     || fail "prose mentioning the limit classified as parked"
   pass "fm_composer_claude_usage_limit: the banner-free pane, a busy footer, a headline above a busy footer, and prose are not parked"
+}
+
+test_banner_above_the_pane_tail_is_not_parked() {
+  local reset='' banner='' window=''
+  ! fm_composer_claude_usage_limit "$LONG_IDLE_PANE" reset banner window \
+    || fail "a quoted banner that ordinary work scrolled above the pane tail classified as parked: '$banner'"
+  # The SAME session, captured while that same quote was still at the tail.
+  fm_composer_claude_usage_limit "$BANNER_QUOTE_HEAD" reset banner window \
+    || fail "the same quoted banner inside the pane tail did not classify as parked"
+  [ "$reset" = "9pm (America/New_York)" ] || fail "the tail capture lost the reset phrase: '$reset'"
+  [ "$window" = five_hour ] || fail "the tail capture named window '$window', not five_hour"
+  pass "fm_composer_claude_usage_limit: one session's banner text is parked while it sits at the pane tail and not once ordinary work has scrolled it away"
 }
 
 test_reset_phrase_parses_to_next_wall_clock() {
@@ -445,6 +509,38 @@ test_run_sends_nothing_before_reset_or_with_exhausted_window() {
   FM_FAKE_QUOTA_PCT=95 FM_FAKE_PANE_FILE="$dir/parked.txt" run_resume "$home" run || fail "run failed"
   [ "$(inbox_records "$home" t1)" = 0 ] || fail "a steer was sent with config/limit-resume off"
   pass "fm-limit-resume run: a reset in the future, an exhausted window, and the off switch all send nothing"
+}
+
+test_a_weekly_park_never_decides_a_five_hour_resume() {
+  local home dir now
+  home=$(make_home cross-window); dir=$(dirname "$home")
+  mkdir -p "$dir/panes" "$home/wt-t2" "$home/wt-t3"
+  printf '%s\n' "$PARKED_PANE" > "$dir/panes/t1.txt"
+  printf '%s\n' "$WEEKLY_PANE" > "$dir/panes/t2.txt"
+  printf '%s\n' "$PARKED_PANE" > "$dir/panes/t3.txt"
+  fm_write_meta "$home/state/t3.meta" "window=sess:fm-t3" "kind=ship" "harness=claude" "worktree=$home/wt-t3"
+  # Two five-hour parks recorded while the five-hour window was really spent.
+  FM_FAKE_PANE_DIR="$dir/panes" FM_FAKE_QUOTA_PCT=0 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 600) \
+    run_resume "$home" run || fail "the seeding sweep failed"
+  assert_present "$home/state/t1.limit-park" "t1's park was not recorded"
+  assert_present "$home/state/t3.limit-park" "t3's park was not recorded"
+  # Their reset has passed and both records were re-read moments ago.
+  now=$(date +%s)
+  sed -i "s/^resets_at=.*/resets_at=1/; s/^rechecked_at=.*/rechecked_at=$now/" \
+    "$home/state/t1.limit-park" "$home/state/t3.limit-park"
+  # t2 joins the fleet parked on the WEEKLY window, observed between t1 and t3,
+  # while the five-hour window has reset and reads healthy.
+  fm_write_meta "$home/state/t2.meta" "window=sess:fm-t2" "kind=ship" "harness=claude" "worktree=$home/wt-t2"
+  FM_FAKE_PANE_DIR="$dir/panes" FM_FAKE_QUOTA_PCT=95 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch -60) \
+    FM_FAKE_QUOTA_WEEKLY_PCT=0 FM_FAKE_QUOTA_WEEKLY_RESETS_AT=$(iso_epoch 604800) \
+    run_resume "$home" run || fail "run failed"
+  fm_limit_park_read "$home/state" t2 || fail "the weekly park was not recorded"
+  [ "$FM_LIMIT_PARK_WINDOW" = weekly ] || fail "t2 recorded window '$FM_LIMIT_PARK_WINDOW', not weekly"
+  [ "$(inbox_records "$home" t2)" = 0 ] || fail "the weekly park was steered"
+  [ "$(inbox_records "$home" t1)" = 1 ] || fail "t1 was not resumed on the healthy five-hour window (found $(inbox_records "$home" t1))"
+  [ "$(inbox_records "$home" t3)" = 1 ] \
+    || fail "t3, observed after the weekly park, was not resumed on the healthy five-hour window (found $(inbox_records "$home" t3))"
+  pass "fm-limit-resume run: a weekly park observed mid-sweep never decides another task's five-hour resume"
 }
 
 test_same_banner_refresh_after_passed_reset_resends_once_window_really_moved() {
@@ -752,6 +848,7 @@ test_usage_window_reset_kind_is_registered_and_distinct() {
 
 test_banner_fixture_classifies_parked
 test_pane_without_banner_is_not_parked
+test_banner_above_the_pane_tail_is_not_parked
 test_reset_phrase_parses_to_next_wall_clock
 test_observe_records_park_and_clears_when_banner_gone
 test_observe_trusts_later_quota_reset_and_says_so
@@ -761,6 +858,7 @@ test_watcher_treats_park_as_declared_wait_not_wedge
 test_daemon_classifies_park_as_pause
 test_run_sends_exactly_one_steer_after_reset
 test_run_sends_nothing_before_reset_or_with_exhausted_window
+test_a_weekly_park_never_decides_a_five_hour_resume
 test_same_banner_refresh_after_passed_reset_resends_once_window_really_moved
 test_weekly_park_is_a_declared_wait_that_never_steers
 test_unknown_reset_is_ready_on_a_healthy_live_window
