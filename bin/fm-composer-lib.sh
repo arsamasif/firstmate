@@ -352,6 +352,71 @@ fm_busy_lines_match() {  # [harness]
   [ -n "$regex" ] && printf '%s' "$lines" | grep -qiE "$regex"
 }
 
+# --- Claude usage-limit banner (task fm-usage-limit-resume, 2026-09-04) -----
+# Claude Code parks a session on the account's five-hour usage window with a
+# rendered banner, live-captured verbatim on 2026-09-04 (Claude Code 2.1.261 was
+# the installed build when the shape was recorded on 2026-09-05):
+#
+#   You've hit your session limit · resets 9pm (America/New_York)
+#   /upgrade or /usage-credits to finish what you're working on.
+#   ...
+#   ⚠ /low-priority to continue now at lower priority · uses your weekly limit
+#
+# The banner is a DECLARED EXTERNAL WAIT, not a wedge: every Claude worker on
+# the account parks within the same minute, no turn can run until the window
+# resets, and nothing about the worker itself is stuck. fm_composer_claude_usage_limit
+# is the ONE owner of that shape, following the same rule as every other shape
+# here: an adapter captures a screen and this file classifies it. Two
+# independent rendered signals carry a positive verdict on their own, so no
+# single vendor string is load-bearing: the "hit your ... limit" headline
+# (session or usage wording), and the "/low-priority to continue now" hint that
+# Claude draws only while parked. The reset phrase is parsed OUT of the headline
+# when present and reported raw ("9pm (America/New_York)"); turning it into an
+# epoch is the record owner's job (bin/fm-limit-park-lib.sh), because that
+# needs a clock and a time zone this classifier deliberately does not read.
+# Styling is stripped first so a styled capture (tmux -e) classifies exactly
+# like a plain one. Matched case-insensitively against the plain text, never
+# against a busy footer, so a worker that is mid-turn cannot read as parked.
+FM_COMPOSER_CLAUDE_LIMIT_HEADLINE_RE="hit your (session|usage|(five|5)[- ]hour|weekly) limit"
+FM_COMPOSER_CLAUDE_LIMIT_HINT_RE='/low-priority to continue now'
+FM_COMPOSER_CLAUDE_LIMIT_RESET_RE='resets? (at )?([0-9]{1,2}(:[0-9]{2})?[[:space:]]*(am|pm)?([[:space:]]*\([A-Za-z_/+-]+\))?)'
+
+# fm_composer_claude_usage_limit <screen-text> [<reset-var>] [<banner-var>]
+# 0 when the screen shows Claude's usage-limit banner; <reset-var> receives the
+# raw reset phrase after "resets" (empty when the headline carries none) and
+# <banner-var> the matched headline or hint line, plain text, single line.
+# 1 when no signal matches.
+fm_composer_claude_usage_limit() {  # <screen> [<reset-var>] [<banner-var>]
+  local __fmcl_screen=${1-} __fmcl_reset_var=${2-} __fmcl_banner_var=${3-}
+  local __fmcl_plain __fmcl_line __fmcl_headline='' __fmcl_hint='' __fmcl_reset=''
+  __fmcl_plain=$(printf '%s\n' "$__fmcl_screen" | fm_composer_strip_ansi)
+  while IFS= read -r __fmcl_line; do
+    if [ -z "$__fmcl_headline" ] && printf '%s' "$__fmcl_line" | LC_ALL=C grep -qiE "$FM_COMPOSER_CLAUDE_LIMIT_HEADLINE_RE"; then
+      __fmcl_headline=$__fmcl_line
+    elif [ -z "$__fmcl_hint" ] && printf '%s' "$__fmcl_line" | LC_ALL=C grep -qiF "$FM_COMPOSER_CLAUDE_LIMIT_HINT_RE"; then
+      __fmcl_hint=$__fmcl_line
+    fi
+  done <<EOF
+$__fmcl_plain
+EOF
+  [ -n "$__fmcl_headline" ] || [ -n "$__fmcl_hint" ] || return 1
+  if [ -n "$__fmcl_headline" ]; then
+    __fmcl_reset=$(printf '%s' "$__fmcl_headline" | LC_ALL=C grep -oiE "$FM_COMPOSER_CLAUDE_LIMIT_RESET_RE" | head -1)
+    __fmcl_reset=${__fmcl_reset#[Rr]eset}
+    __fmcl_reset=${__fmcl_reset#s}
+    __fmcl_reset=${__fmcl_reset# }
+    __fmcl_reset=${__fmcl_reset#at }
+    fm_composer_normalize_trim_var __fmcl_reset
+  fi
+  [ -z "$__fmcl_reset_var" ] || printf -v "$__fmcl_reset_var" '%s' "$__fmcl_reset"
+  if [ -n "$__fmcl_banner_var" ]; then
+    __fmcl_line=${__fmcl_headline:-$__fmcl_hint}
+    fm_composer_normalize_trim_var __fmcl_line
+    printf -v "$__fmcl_banner_var" '%s' "$__fmcl_line"
+  fi
+  return 0
+}
+
 # The prompt glyphs, each declared exactly once (see THE SAFETY RULE above).
 # AGENT glyphs are a genuine empty agent composer on any row, bordered or bare.
 # SHELL glyphs are one only INSIDE a composer container; on a bare row they are

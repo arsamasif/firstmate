@@ -73,6 +73,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# shellcheck source=bin/fm-limit-park-lib.sh
+. "$SCRIPT_DIR/fm-limit-park-lib.sh"
 
 ID=${1:-}
 [ -n "$ID" ] || { echo "usage: fm-crew-state.sh <id>" >&2; exit 2; }
@@ -429,6 +431,26 @@ nm_run_head_matches_worktree() {
 nm_coarse_head_matches_worktree() {  # <short-sha>
   fm_nm_head_matches_worktree "$WT" "$1"
 }
+
+# --- usage-limit park: a declared external wait, read BEFORE any run lookup --
+# A Claude worker whose pane shows the account's usage-limit banner cannot take a
+# turn until the window resets, whatever its pipeline is doing in the background,
+# so it reports the distinct `paused` state with the reset time. Pure read: the
+# banner is classified from a fresh bounded capture (bin/fm-composer-lib.sh owns
+# the shape) and the reset comes from the durable record when the watcher or the
+# resume sweep has written one; nothing is written here. Only a claude harness
+# can show this banner, so every other worker skips the capture.
+if [ "$HARNESS" = claude ] && [ -z "$REMOTE_HOST" ] && [ -n "$BACKEND_TARGET" ] \
+  && pane_readable "$BACKEND_TARGET"; then
+  PARK_SCREEN=$(fm_backend_capture "$TASK_BACKEND" "$BACKEND_TARGET" 40 "$EXPECTED_LABEL" 2>/dev/null) || PARK_SCREEN=
+  PARK_RESET=
+  if [ -n "$PARK_SCREEN" ] && fm_composer_claude_usage_limit "$PARK_SCREEN" PARK_RESET; then
+    if ! PARK_DETAIL=$(fm_limit_park_describe "$STATE" "$ID" 2>/dev/null); then
+      PARK_DETAIL="parked on the Claude usage limit${PARK_RESET:+ until $PARK_RESET}, resumes automatically after the reset"
+    fi
+    emit paused pane "$PARK_DETAIL"
+  fi
+fi
 
 HAVE_RUN=0
 # RUN_SOURCE distinguishes the two ways HAVE_RUN=1 can happen: "full" means

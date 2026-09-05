@@ -490,6 +490,47 @@ tests/fm-claude-stop-autoarm.test.sh
 tests/fm-turnend-guard.test.sh
 ```
 
+## Usage-limit park and tokenless resume
+
+Recorded 2026-09-05 against the live incident of 2026-09-04, when every Claude worker and the Claude primary parked on the shared five-hour window and nothing resumed for 7.9 hours.
+The banner fixture is the exact rendered text from that pane; the installed Claude Code when the shape was recorded was 2.1.261 and quota-axi was 0.1.30.
+No credential material was copied into a fixture, and every case runs in a throwaway home with a fake tmux, a fake quota-axi, and fake schedulers.
+
+```sh
+claude --version
+quota-axi --version
+bin/fm-test-run.sh tests/fm-limit-resume.test.sh
+```
+
+Observed output:
+
+```text
+2.1.261 (Claude Code)
+0.1.30
+ok - fm_composer_claude_usage_limit: the live banner fixture, styled or plain, classifies as parked with its reset phrase
+ok - fm_composer_claude_usage_limit: the banner-free pane, a busy footer, and prose are not parked
+ok - fm_limit_park_parse_reset: zoned and local phrases resolve to the next such wall clock; garbage is refused
+ok - fm_limit_park_observe: writes the record with the later of banner and quota-axi, keeps the episode on refresh, clears when the banner is gone
+ok - fm_limit_park_observe: a later quota-axi reset wins over the banner and the note says which was trusted
+ok - fm-crew-state: a parked Claude pane reports paused with the park detail; the same pane without the banner does not
+ok - fm-watch: an active park record is a declared wait (paused class) for the watcher; without it nothing is declared
+ok - fm-supervise-daemon: classify_stale routes a park record as a declared pause and a bare stale as before
+ok - fm-limit-resume run: a reset in the past with a healthy window sends exactly one steer through fm-send, and a second sweep sends none
+ok - fm-limit-resume run: a reset in the future, an exhausted window, and the off switch all send nothing
+ok - fm-limit-resume run: idle Claude tasks and non-Claude tasks are left alone
+ok - fm-limit-resume run: a parked, recorded primary receives exactly one guarded usage-window-reset input after the reset, plus one durable wake
+ok - fm-limit-resume run: the composer guard defers the primary input while the composer holds text, and retries next sweep
+ok - fm-limit-resume: an unreachable primary still gets its crews resumed, a durable wake, and the plain-language bootstrap line
+ok - fm-limit-resume install --scheduler cron: two installs leave one tagged entry, foreign lines survive, uninstall is idempotent
+ok - fm-limit-resume install --scheduler systemd: two installs leave one timer, and uninstall removes it
+ok - fm-guard: a stale beacon inside a recorded park window reads as parked on the usage limit; an expired record alarms as before
+ok - fm-operational-input: usage-window-reset is a registered kind distinct from a captain message and an away escalation
+```
+
+Observed guarantee: the parked pane is a declared external wait with its reset time everywhere the fleet reads one, exactly one resume steer per park episode leaves through `bin/fm-send.sh` after the reset with a healthy window, a recorded primary receives one guarded `usage-window-reset` input, an unrecorded primary receives a durable wake plus the bootstrap line, two scheduler installs leave one entry, and a stale beacon inside a recorded park is described as parked rather than as a lapsed watcher.
+The live banner fixture and the same pane without it are the positive and negative controls, so the classifier cannot go vacuous.
+The rendered banner is a vendor surface; re-run `bin/fm-test-run.sh tests/fm-limit-resume.test.sh` after a Claude Code upgrade and refresh this record if the banner wording changes.
+
 ## Wedge-alarm channels
 
 The two real notification channels were bounded manually on 2026-07-10 on macOS 26.5.2 with Herdr 0.7.3.

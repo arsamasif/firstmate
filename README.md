@@ -89,8 +89,11 @@ Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
 **Claude Code**
 
 ```sh
+tmux new -s firstmate
 claude
 ```
+
+Launching inside tmux (or herdr) is what lets a Claude primary resume by itself after the account's usage window resets: the tokenless resume sweep (`bin/fm-limit-resume.sh install`, reported at every session start) can then type the reset into the primary's pane, and outside any reachable pane it can only resume the workers and leave a notification for your next message; see the [usage-limit resume configuration](docs/configuration.md#usage-limit-resume-configlimit-resume).
 
 **Grok**
 
