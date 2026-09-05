@@ -1,0 +1,221 @@
+### 1. A real tmux window (private server) renders the exact 2026-09-04 banner in a Claude crewmate pane
+
+$ tmux capture-pane -p -t fmdemo:fm-t1 -S 0 -E 10
+  ⏺ Reading the stale path in the watcher.
+
+  You've hit your session limit · resets 9pm (America/New_York)
+  /upgrade or /usage-credits to finish what you're working on.
+
+  ─────────────────────────────────────────────────────────────
+  ⚠ /low-priority to continue now at lower priority · uses your weekly limit
+
+  ❯
+
+
+
+### 2. fm-crew-state reports the park as a first-class paused state (before any run lookup)
+
+$ /home/pending/.no-mistakes/worktrees/84c683ef0f4c/01M1RC6JP8D8Q7N1REC7XFVQVY/bin/fm-crew-state.sh t1
+state: paused · source: pane · parked on the Claude usage limit until 9pm (America/New_York), resumes automatically after the reset
+
+### 3. First sweep: window still exhausted (quota-axi 0%, resets in 10 min; banner says 9pm NY) -> record written, nothing sent
+
+$ QPCT=0 QRESET=2026-09-05T09:31:14+00:00 fm-limit-resume.sh run
+
+$ cat /tmp/fm-demo/home/state/t1.limit-park
+v1
+episode=1788656400
+observed_at=1788600074
+last_seen=1788600074
+window=five_hour
+banner=You've hit your session limit · resets 9pm (America/New_York)
+banner_reset=9pm (America/New_York)
+banner_resets_at=1788656400
+quota_pct=0
+quota_resets_at=1788600674
+resets_at=1788656400
+reset_source=banner
+rechecked_at=
+note=banner reset 21:00 EDT on 2026-09-05 is later than quota-axi five_hour resetsAt 05:31 EDT on 2026-09-05; trusting the later banner time
+
+$ cat /tmp/fm-demo/home/state/.limit-resume.log
+2026-09-05T05:21:14-0400 quota-axi five_hour: 0% remaining, resets 05:31 EDT on 2026-09-05
+2026-09-05T05:21:14-0400 t1 still parked until 21:00 EDT on 2026-09-05 (banner)
+2026-09-05T05:21:14-0400 sweep: parked=1 resumed=0 primary=unrecorded
+
+$ ls /tmp/fm-demo/home/state/t1.inbox 2>&1
+ls: cannot access '/tmp/fm-demo/home/state/t1.inbox': No such file or directory
+
+### 4. Simulate the clock passing the reconciled reset (the record's resets_at is pinned into the past; a real box would just wait). quota-axi now reads 95%
+
+$ sed -i 's/^resets_at=.*/resets_at=1/' state/t1.limit-park
+
+$ QPCT=95 QRESET=2026-09-05T09:20:14+00:00 fm-limit-resume.sh run
+
+$ tail -n 3 /tmp/fm-demo/home/state/.limit-resume.log
+2026-09-05T05:21:14-0400 t1 reset cross-check: banner reset 21:00 EDT on 2026-09-05 is later than quota-axi five_hour resetsAt 05:31 EDT on 2026-09-05; trusting the later banner time
+2026-09-05T05:21:15-0400 resumed t1 after the usage window reset (19:00 EST on 1969-12-31): steer recorded
+2026-09-05T05:21:16-0400 sweep: parked=1 resumed=1 primary=unrecorded
+
+$ cat state/t1.inbox/*.msg   # the durable steer record
+schema=fm-task-inbox.v1
+at=2026-09-05T09:21:14Z
+--
+The Claude usage window has reset (automatic resume, no captain present). If a no-mistakes run exists for your branch, read `no-mistakes axi status` FIRST and drive from its current gate or outcome; never restart the run or start a second one while it owns the branch. If no run exists, continue your brief from where you stopped. Append your normal status line when you reach the next gate or outcome.
+$ cat /tmp/fm-demo/home/state/t1.limit-park.resumed
+episode=1788656400 resets_at=1 sent_at=1788600075
+
+### 5. The doorbell reached the REAL tmux pane (the simulated pane prints what it received)
+
+$ tmux capture-pane -p -t fmdemo:fm-t1 -S 0 -E 13
+
+  ─────────────────────────────────────────────────────────────
+  ⚠ /low-priority to continue now at lower priority · uses your weekly limit
+
+  ❯ Firstmate instruction waiting: list /tmp/fm-demo/home/state/t1.inbox/*.msg and, in num
+eric order, read and act on each, then mv each handled file to /tmp/fm-demo/home/state/t1.
+inbox/handled/.
+
+
+  ⏺ received: Firstmate instruction waiting: list /tmp/fm-demo/home/state/t1.inbox/*.msg a
+nd, in numeric order, read and act on each, then mv each handled file to /tmp/fm-demo/home
+/state/t1.inbox/handled/.
+
+  ❯
+
+### 6. Second sweep in the same episode: banner still on screen, nothing more is sent
+
+$ QPCT=95 QRESET=2026-09-05T09:20:14+00:00 fm-limit-resume.sh run
+
+$ ls state/t1.inbox/*.msg | wc -l
+1
+
+$ tail -n 2 /tmp/fm-demo/home/state/.limit-resume.log
+2026-09-05T05:21:16-0400 t1 reset cross-check: banner reset 21:00 EDT on 2026-09-05 is later than quota-axi five_hour resetsAt 05:31 EDT on 2026-09-05; trusting the later banner time
+2026-09-05T05:21:16-0400 sweep: parked=1 resumed=0 primary=unrecorded
+
+### 7. Primary not in a reachable pane: durable wake + plain bootstrap guidance
+
+$ cat /tmp/fm-demo/home/state/.wake-queue
+1788600075	1	check	usage-window-reset	check: usage-window-reset: resumed 1 parked worker(s) after the Claude usage window reset; primary: unrecorded. Drain, then continue supervision
+
+$ /home/pending/.no-mistakes/worktrees/84c683ef0f4c/01M1RC6JP8D8Q7N1REC7XFVQVY/bin/fm-limit-resume.sh bootstrap-lines
+LIMIT_RESUME: not armed - run bin/fm-limit-resume.sh install so parked Claude workers and this session resume by themselves after the usage window resets (config/limit-resume containing 'off' silences this)
+LIMIT_RESUME: this session cannot resume itself after a usage-window reset because it is not running inside a tmux or herdr pane the resume sweep can reach; parked workers still resume and a durable notification waits for your next message. To make the session self-resuming, launch firstmate inside tmux (README 'Install and launch'): `tmux new -s firstmate`, then `claude` from the firstmate home
+
+### 8. The primary parked in a real tmux pane: record-primary, outage record, guard wording, guarded injection after the reset
+
+$ FM_SUPERVISOR_TARGET=fmdemo:fm-primary FM_SUPERVISOR_BACKEND=tmux fm-limit-resume.sh record-primary
+primary pane recorded: tmux fmdemo:fm-primary (claude)
+
+$ cat /tmp/fm-demo/home/state/.primary-pane
+tmux	fmdemo:fm-primary	claude	524703
+
+$ QPCT=0 QRESET=2026-09-05T10:21:17+00:00 fm-limit-resume.sh run   # primary parked, reset in the future
+
+$ cat /tmp/fm-demo/home/state/.primary.limit-park
+v1
+episode=1788656400
+observed_at=1788600077
+last_seen=1788600077
+window=five_hour
+banner=You've hit your session limit · resets 9pm (America/New_York)
+banner_reset=9pm (America/New_York)
+banner_resets_at=1788656400
+quota_pct=0
+quota_resets_at=1788603677
+resets_at=1788656400
+reset_source=banner
+rechecked_at=
+note=banner reset 21:00 EDT on 2026-09-05 is later than quota-axi five_hour resetsAt 06:21 EDT on 2026-09-05; trusting the later banner time
+
+$ cat /tmp/fm-demo/home/state/.limit-park-outage
+from=1788600074 until=1788656400 observed_at=1788600077 source=primary
+
+$ FM_GUARD_GRACE=1 FM_SUPERVISION_MODEL=autoarm fm-guard.sh   # stale beacon inside the park window
+●  SUPERVISION WAS PARKED ON THE CLAUDE USAGE LIMIT - NOT A LAPSED WATCHER
+●  This session was parked on the Claude usage limit from 05:21 EDT on 2026-09-05 to 21:00 EDT on 2026-09-05.
+●  The watcher beacon went stale (last beat: never) because the limit refused every turn,
+●  Drain the queue (bin/fm-wake-drain.sh), resume any parked worker the resume sweep has not,
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+
+$ sed -i 's/^resets_at=.*/resets_at=1/' state/.primary.limit-park   # the reset passes
+
+$ QPCT=95 QRESET=2026-09-05T09:20:14+00:00 fm-limit-resume.sh run
+
+$ tail -n 3 /tmp/fm-demo/home/state/.limit-resume.log
+2026-09-05T05:21:18-0400 .primary reset cross-check: banner reset 21:00 EDT on 2026-09-05 is later than quota-axi five_hour resetsAt 06:21 EDT on 2026-09-05; trusting the later banner time
+2026-09-05T05:21:19-0400 primary resumed: usage-window-reset input delivered to tmux pane fmdemo:fm-primary
+2026-09-05T05:21:19-0400 sweep: parked=1 resumed=0 primary=resumed
+
+$ tmux capture-pane -p -t fmdemo:fm-primary -S 0 -E 13
+9-12-31 and this session was parked on it. Drain the wake queue first (bin/fm-wake-drain.s
+h), resume any parked crewmate the tokenless resume owner has not already resumed (state/<
+id>.limit-park without a matching .resumed marker), then continue normal supervision. This
+ is an operational input, not a captain message; away mode, if active, stays active.
+
+
+  ⏺ received: ⁣FIRSTMATE_OP: v1 usage-window-reset: The Claude usage window reset at 19:00
+EST on 1969-12-31 and this session was parked on it. Drain the wake queue first (bin/fm-wa
+ke-drain.sh), resume any parked crewmate the tokenless resume owner has not already resume
+d (state/<id>.limit-park without a matching .resumed marker), then continue normal supervi
+sion. This is an operational input, not a captain message; away mode, if active, stays act
+ive.
+
+  ❯
+
+$ cat state/.primary.limit-park.resumed 2>&1
+episode=1788656400 resets_at=1 sent_at=1788600079
+
+### 9. Arming the sweep (fake crontab, fake systemctl; the real user crontab is never touched) and the bootstrap line
+
+$ /home/pending/.no-mistakes/worktrees/84c683ef0f4c/01M1RC6JP8D8Q7N1REC7XFVQVY/bin/fm-limit-resume.sh install --scheduler cron
+armed: crontab entry (every 5 minutes)
+
+$ /home/pending/.no-mistakes/worktrees/84c683ef0f4c/01M1RC6JP8D8Q7N1REC7XFVQVY/bin/fm-limit-resume.sh install --scheduler cron
+armed: crontab entry (every 5 minutes)
+
+$ cat /tmp/fm-demo/crontab.txt
+*/5 * * * * PATH=/tmp/fm-demo/fakebin:/home/pending/.local/bin:/home/pending/.npm-global/bin:/home/pending/.local/bin:/usr/local/bin:/home/pending/.local/bin:/home/pending/go/bin:/home/pending/.cargo/bin:/home/pending/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin FM_HOME=/tmp/fm-demo/home /home/pending/.no-mistakes/worktrees/84c683ef0f4c/01M1RC6JP8D8Q7N1REC7XFVQVY/bin/fm-limit-resume.sh run >/dev/null 2>&1 # firstmate-limit-resume home=/tmp/fm-demo/home
+
+$ /home/pending/.no-mistakes/worktrees/84c683ef0f4c/01M1RC6JP8D8Q7N1REC7XFVQVY/bin/fm-limit-resume.sh status
+usage-limit resume: armed (crontab entry)
+primary pane: tmux fmdemo:fm-primary (claude)
+outage record: parked on the Claude usage limit from 05:21 EDT on 2026-09-05 to 21:00 EDT on 2026-09-05
+
+$ /home/pending/.no-mistakes/worktrees/84c683ef0f4c/01M1RC6JP8D8Q7N1REC7XFVQVY/bin/fm-limit-resume.sh bootstrap-lines
+BOOTSTRAP_INFO: usage-limit resume armed (crontab entry); parked Claude workers resume by themselves after the window resets
+
+$ /home/pending/.no-mistakes/worktrees/84c683ef0f4c/01M1RC6JP8D8Q7N1REC7XFVQVY/bin/fm-limit-resume.sh uninstall
+disarmed: crontab entry
+
+$ /home/pending/.no-mistakes/worktrees/84c683ef0f4c/01M1RC6JP8D8Q7N1REC7XFVQVY/bin/fm-limit-resume.sh status
+usage-limit resume: not armed (run bin/fm-limit-resume.sh install)
+primary pane: tmux fmdemo:fm-primary (claude)
+outage record: parked on the Claude usage limit from 05:21 EDT on 2026-09-05 to 21:00 EDT on 2026-09-05
+
+### 10. Banner gone from the pane (scrolled out of the 40-line capture; clear-history stands in for that): the record clears on the next sweep
+
+$ tmux capture-pane -p -t fmdemo:fm-t1 -S -40
+  ⏺ Done.
+
+  ❯
+
+
+
+
+
+
+
+
+
+
+
+
+$ QPCT=95 QRESET=2026-09-05T09:20:14+00:00 fm-limit-resume.sh run
+
+$ ls state/t1.limit-park 2>&1
+ls: cannot access '/tmp/fm-demo/home/state/t1.limit-park': No such file or directory
+
+$ grep t1 state/.limit-resume.log | tail -n 1
+2026-09-05T05:21:18-0400 t1 reset cross-check: banner reset 21:00 EDT on 2026-09-05 is later than quota-axi five_hour resetsAt 05:31 EDT on 2026-09-05; trusting the later banner time

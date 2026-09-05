@@ -1,0 +1,37 @@
+FM_TEST_BEGIN 2026-09-05T09:16:01Z tests/fm-limit-resume.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - fm_composer_claude_usage_limit: the live banner fixture, styled or plain, classifies as parked with its reset phrase
+ok - fm_composer_claude_usage_limit: the banner-free pane, a busy footer, a headline above a busy footer, and prose are not parked
+ok - fm_limit_park_parse_reset: zoned and local phrases resolve to the next such wall clock; garbage is refused
+ok - fm_limit_park_observe: writes the record with the later of banner and quota-axi, keeps the episode on refresh, clears when the banner is gone
+ok - fm_limit_park_observe: a later quota-axi reset wins over the banner and the note says which was trusted
+ok - fm-crew-state: a parked Claude pane reports paused with the park detail; the same pane without the banner does not
+ok - fm-watch: an active park record is a declared wait (paused class) for the watcher; without it nothing is declared
+ok - fm-supervise-daemon: classify_stale routes a park record as a declared pause and a bare stale as before
+ok - fm-limit-resume run: a reset in the past with a healthy window sends exactly one steer through fm-send, and a second sweep sends none
+ok - fm-limit-resume run: a reset in the future, an exhausted window, and the off switch all send nothing
+ok - fm-limit-resume run: a same-banner refresh after a passed reset re-reads quota-axi, advances the episode when the live reset moved, and steers once more when that reset has really passed
+ok - fm-limit-resume run: a weekly park is recorded as a declared wait that says it is not resumed, is never steered, and the five-hour banner in the same home still is
+ok - fm-limit-resume run: a record with no reconciled reset waits on an exhausted live window and resumes on a healthy one without waiting for the next window's end
+ok - fm-limit-resume run: idle Claude tasks and non-Claude tasks are left alone
+ok - fm-limit-resume run: a parked, recorded primary receives exactly one guarded usage-window-reset input after the reset, plus one durable wake
+ok - fm-limit-resume run: the composer guard defers the primary input while the composer holds text, and retries next sweep
+ok - fm-limit-resume: an unreachable primary still gets its crews resumed, a durable wake, and the plain-language bootstrap line
+ok - fm-limit-resume install --scheduler cron: two installs leave one tagged entry, foreign lines survive, uninstall is idempotent
+ok - fm-limit-resume install --scheduler systemd: two installs leave one timer, and uninstall removes it
+ok - fm-guard: a stale beacon inside a recorded park window reads as parked on the usage limit; an expired record alarms as before
+ok - fm-operational-input: usage-window-reset is a registered kind distinct from a captain message and an away escalation
+FM_TEST_END 2026-09-05T09:16:14Z tests/fm-limit-resume.test.sh exit=0 duration_ms=12918 gate_skip=false
+FM_TEST_BEGIN 2026-09-05T09:16:14Z tests/fm-operational-input.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - operational input: every current generic envelope retains its exact structured kind
+ok - operational input: the established from-firstmate carrier remains structurally typed and byte-compatible
+ok - operational input: untyped landed FIRSTMATE_OP transcripts are explicit legacy-operational input
+ok - operational input: historical prose compatibility is isolated from current parsing
+ok - operational input: quoted, ASCII-only, arbitrary-U+2063, altered-legacy, and label-only near misses stay genuine
+ok - operational input: the OpenCode adapter constructs through the canonical owner
+ok - operational input: current construction rejects legacy kinds and empty bodies
+FM_TEST_END 2026-09-05T09:16:14Z tests/fm-operational-input.test.sh exit=0 duration_ms=262 gate_skip=false
+FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=13272
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=1 duration_ms=262 failed=0
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=1 duration_ms=12918 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-limit-resume.test.sh duration_ms=12918
+FM_TEST_SLOWEST rank=2 script=tests/fm-operational-input.test.sh duration_ms=262

@@ -1,0 +1,19 @@
+# Pre-fix commit 3f689a7 shipped bin/fm-limit-resume.sh without the exec bit (fixed in 398d3a0):
+#   -rw-rw-r-- /tmp/fm-prefix-3f689a7/bin/fm-limit-resume.sh
+# (chmod +x applied to the throwaway copy below so the behavioral regressions can run)
+
+== test_pane_without_banner_is_not_parked
+not ok - a headline in transcript position above a live busy footer classified as parked
+   -> exit 1
+== test_same_banner_refresh_after_passed_reset_resends_once_window_really_moved
+not ok - the episode did not advance when the live reset moved
+   -> exit 1
+== test_weekly_park_is_a_declared_wait_that_never_steers
+not ok - record window is '', not weekly
+   -> exit 1
+== test_unknown_reset_is_ready_on_a_healthy_live_window
+not ok - log does not name the live wait
+   -> exit 1
+== test_run_sends_exactly_one_steer_after_reset
+ok - fm-limit-resume run: a reset in the past with a healthy window sends exactly one steer through fm-send, and a second sweep sends none
+   -> exit 0
