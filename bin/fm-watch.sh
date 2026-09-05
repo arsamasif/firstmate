@@ -126,7 +126,7 @@ mkdir -p "$STATE"
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
-# Usage-limit park records: a Claude worker parked on the account's five-hour
+# Usage-limit park records: a Claude worker parked on the account's usage
 # window is a declared external wait the worker could not append itself.
 # bin/fm-limit-park-lib.sh owns the record; this watcher observes each Claude
 # pane's capture into it and treats an active record exactly like a paused:
