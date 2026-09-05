@@ -375,12 +375,13 @@ fm_busy_lines_match() {  # [harness]
 # epoch is the record owner's job (bin/fm-limit-park-lib.sh), because that
 # needs a clock and a time zone this classifier deliberately does not read.
 # Styling is stripped first so a styled capture (tmux -e) classifies exactly
-# like a plain one. Both signals are matched case-insensitively, and ONLY
-# within the last 12 non-blank rows of the capture: the banner Claude draws
-# over a parked composer sits at the pane tail, while the same words quoted in
-# a transcript above a live prompt are displayed content, which this file never
-# lets drive a pane verdict (the rule bin/fm-watch.sh states inline for busy
-# strings). Every other shape here reads the same tail window.
+# like a plain one. Both signals are matched case-insensitively, and only
+# within the last 12 non-blank rows of the capture, the same tail window every
+# other shape here reads. This function reports the SCREEN SIGNAL only: a
+# worker that merely displays the banner text (reading this file, grepping for
+# the hint) shows it too, so deciding whether a park is real is the record
+# owner's job - bin/fm-limit-park-lib.sh corroborates the signal against the
+# live quota window before it opens a park record, and states that contract.
 #
 # The verdict names the WINDOW the park is on: `five_hour` for the session,
 # usage, and five-hour headlines and for the hint alone; `weekly` for the

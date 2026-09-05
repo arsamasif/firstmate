@@ -64,10 +64,10 @@ BUSY_AFTER_BANNER_PANE=$(cat <<'EOF'
   ✻ Thinking… (12s · esc to interrupt)
 EOF
 )
-# The banner quoted back as file content in a transcript, followed by enough
-# ordinary work that it sits outside the pane tail, ending at a live prompt:
-# displayed content on an idle worker, not a park.
-BANNER_IN_TRANSCRIPT_PANE=$(cat <<'EOF'
+# The banner quoted back as file content while a healthy worker reads this
+# feature's own source, ending at a live prompt: the shape a Claude crewmate
+# working on firstmate reaches by opening one of these files and idling.
+BANNER_QUOTED_PANE=$(cat <<'EOF'
   ⏺ Read(bin/fm-composer-lib.sh)
 
   #   You've hit your session limit · resets 9pm (America/New_York)
@@ -75,18 +75,16 @@ BANNER_IN_TRANSCRIPT_PANE=$(cat <<'EOF'
   #   ⚠ /low-priority to continue now at lower priority · uses your weekly limit
 
   ⏺ Done reading the classifier.
-  ⏺ Read(bin/fm-limit-park-lib.sh)
-  ⏺ Read(bin/fm-limit-resume.sh)
-  ⏺ Read(bin/fm-watch.sh)
-  ⏺ Read(bin/fm-crew-state.sh)
-  ⏺ Read(bin/fm-guard.sh)
-  ⏺ Read(tests/fm-limit-resume.test.sh)
-  ⏺ Read(docs/watcher-continuity.md)
-  ⏺ Read(AGENTS.md)
-  ⏺ Wrote the note into the brief.
-  ⏺ Nothing else to do here.
 
-  ─────────────────────────────────────────────────────────────
+  ❯
+EOF
+)
+# The hint signal alone, in a grep tool result on the same healthy worker.
+HINT_IN_TOOL_OUTPUT_PANE=$(cat <<'EOF'
+  ⏺ Bash(grep -n low-priority bin/fm-composer-lib.sh)
+    ⎿  383:  ⚠ /low-priority to continue now at lower priority · uses your weekly limit
+
+  ⏺ Found one match.
 
   ❯
 EOF
@@ -260,17 +258,6 @@ test_pane_without_banner_is_not_parked() {
   pass "fm_composer_claude_usage_limit: the banner-free pane, a busy footer, a headline above a busy footer, and prose are not parked"
 }
 
-test_banner_outside_the_pane_tail_is_not_parked() {
-  local reset='' banner='' window=''
-  ! fm_composer_claude_usage_limit "$BANNER_IN_TRANSCRIPT_PANE" reset banner window \
-    || fail "banner text scrolled above the pane tail classified as parked: banner='$banner' reset='$reset'"
-  fm_composer_claude_usage_limit "$PARKED_PANE" reset banner window \
-    || fail "the live banner fixture stopped classifying as parked"
-  [ "$reset" = "9pm (America/New_York)" ] || fail "the live fixture's reset phrase changed: '$reset'"
-  [ "$window" = five_hour ] || fail "the live fixture's window changed: '$window'"
-  pass "fm_composer_claude_usage_limit: the banner counts only inside the pane tail, and the live fixture still parks"
-}
-
 test_reset_phrase_parses_to_next_wall_clock() {
   local now epoch
   now=$(date +%s)
@@ -323,6 +310,42 @@ test_observe_trusts_later_quota_reset_and_says_so() {
   pass "fm_limit_park_observe: a later quota-axi reset wins over the banner and the note says which was trusted"
 }
 
+test_healthy_window_refuses_to_open_a_park_for_displayed_banner_text() {
+  local home dir
+  home=$(make_home corroborate); dir=$(dirname "$home")
+  # NEGATIVE: the banner quoted in a transcript, and the hint alone in a tool
+  # result, beside a window that still has headroom: no park, nothing on disk.
+  ! FM_FAKE_QUOTA_PCT=67 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
+    fm_limit_park_observe "$home/state" t1 "$BANNER_QUOTED_PANE" \
+    || fail "a banner quoted beside a healthy window opened a park"
+  assert_absent "$home/state/t1.limit-park" "the refused observation wrote a record"
+  ! FM_FAKE_QUOTA_PCT=67 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
+    fm_limit_park_observe "$home/state" t1 "$HINT_IN_TOOL_OUTPUT_PANE" \
+    || fail "the hint in a grep result beside a healthy window opened a park"
+  assert_absent "$home/state/t1.limit-park" "the refused observation wrote a record"
+  # NON-STICKY: the live banner is refused too while the window reads healthy.
+  ! FM_FAKE_QUOTA_PCT=67 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
+    fm_limit_park_observe "$home/state" t1 "$PARKED_PANE" \
+    || fail "the live banner opened a park while the window still reads 67%"
+  assert_absent "$home/state/t1.limit-park" "the refused observation wrote a record"
+  # POSITIVE: the very next observation, once quota-axi has caught up, opens the
+  # park for the same task with its reset phrase intact - the refusal poisoned
+  # nothing.
+  FM_FAKE_QUOTA_PCT=0 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 600) FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
+    fm_limit_park_observe "$home/state" t1 "$PARKED_PANE" || fail "an exhausted window did not admit the live banner"
+  assert_present "$home/state/t1.limit-park" "the corroborated park was not recorded"
+  fm_limit_park_read "$home/state" t1 || fail "park record did not read back"
+  [ "$FM_LIMIT_PARK_BANNER_RESET" = "9pm (America/New_York)" ] \
+    || fail "the corroborated record lost the reset phrase: '$FM_LIMIT_PARK_BANNER_RESET'"
+  [ "$FM_LIMIT_PARK_WINDOW" = five_hour ] || fail "record window is '$FM_LIMIT_PARK_WINDOW', not five_hour"
+  # An unreadable quota-axi still admits the park: a missed park is the incident.
+  fm_limit_park_clear "$home/state" t1
+  FM_FAKE_QUOTA_ABSENT=1 FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
+    fm_limit_park_observe "$home/state" t1 "$PARKED_PANE" || fail "an unreadable quota-axi refused the park"
+  assert_present "$home/state/t1.limit-park" "an unreadable quota-axi left no record"
+  pass "fm_limit_park_observe: a park opens only when the window the banner names corroborates it, and refusing poisons nothing"
+}
+
 # --- 3. crew-state: paused-class verdict, never stale ---------------------------
 
 test_crew_state_reports_parked_pane_as_paused() {
@@ -339,7 +362,7 @@ test_crew_state_reports_parked_pane_as_paused() {
 test_watcher_treats_park_as_declared_wait_not_wedge() {
   local home dir out
   home=$(make_home watcher); dir=$(dirname "$home")
-  FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" fm_limit_park_observe "$home/state" t1 "$PARKED_PANE" >/dev/null
+  FM_FAKE_QUOTA_PCT=0 FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" fm_limit_park_observe "$home/state" t1 "$PARKED_PANE" >/dev/null
   out=$(PATH="$dir/fakebin:$PATH" FM_STATE_OVERRIDE="$home/state" FM_FAKE_PANE_FILE="$dir/parked.txt" bash -c '
     . "$1"
     task_declares_wait t1 || { echo "declares:no"; exit 0; }
@@ -361,7 +384,7 @@ test_watcher_treats_park_as_declared_wait_not_wedge() {
 test_daemon_classifies_park_as_pause() {
   local home dir out
   home=$(make_home daemon); dir=$(dirname "$home")
-  FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" fm_limit_park_observe "$home/state" t1 "$PARKED_PANE" >/dev/null
+  FM_FAKE_QUOTA_PCT=0 FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" fm_limit_park_observe "$home/state" t1 "$PARKED_PANE" >/dev/null
   out=$(FM_STATE_OVERRIDE="$home/state" FM_TEST_DAEMON_SOURCED=1 bash -c '
     . "$1"
     classify_stale sess:fm-t1 "$2"
@@ -382,7 +405,7 @@ test_run_sends_exactly_one_steer_after_reset() {
   local home dir n
   home=$(make_home run-once); dir=$(dirname "$home")
   # A park whose banner reset already passed: pin the record with a past reset.
-  FM_FAKE_QUOTA_PCT=95 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_FAKE_PANE_FILE="$dir/parked.txt" \
+  FM_FAKE_QUOTA_PCT=0 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_FAKE_PANE_FILE="$dir/parked.txt" \
     run_resume "$home" run || fail "run failed"
   # First sighting: the banner says 9pm New York, which is in the future, so
   # nothing is sent yet.
@@ -406,7 +429,7 @@ test_run_sends_exactly_one_steer_after_reset() {
 test_run_sends_nothing_before_reset_or_with_exhausted_window() {
   local home dir
   home=$(make_home run-future); dir=$(dirname "$home")
-  FM_FAKE_QUOTA_PCT=95 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 7200) FM_FAKE_PANE_FILE="$dir/parked.txt" \
+  FM_FAKE_QUOTA_PCT=0 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 7200) FM_FAKE_PANE_FILE="$dir/parked.txt" \
     run_resume "$home" run || fail "run failed"
   [ "$(inbox_records "$home" t1)" = 0 ] || fail "a steer was sent while the reset is in the future"
   grep -q 'still parked until' "$home/state/.limit-resume.log" || fail "log does not explain the wait"
@@ -548,7 +571,7 @@ test_run_injects_reset_into_recorded_primary_pane() {
     || fail "record-primary failed"
   assert_present "$home/state/.primary-pane" "primary pane record was not written"
   # First sweep: parked, reset in the future -> nothing typed.
-  FM_FAKE_QUOTA_PCT=95 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_FAKE_PANE_FILE="$dir/parked.txt" \
+  FM_FAKE_QUOTA_PCT=0 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_FAKE_PANE_FILE="$dir/parked.txt" \
     FM_FAKE_TMUX_CURSOR_Y=8 run_resume "$home" run || fail "run failed"
   assert_present "$home/state/.primary.limit-park" "primary park was not recorded"
   assert_present "$home/state/.limit-park-outage" "outage record was not written for a parked primary"
@@ -581,7 +604,7 @@ test_run_defers_primary_injection_while_composer_holds_text() {
   FM_SUPERVISOR_TARGET=%9 FM_SUPERVISOR_BACKEND=tmux run_resume "$home" record-primary >/dev/null
   # A pane showing the banner AND a half-typed captain line under the prompt.
   { printf '%s\n' "$PARKED_PANE"; printf '  ❯ half typed by the captain\n'; } > "$dir/parked-pending.txt"
-  FM_FAKE_QUOTA_PCT=95 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_FAKE_PANE_FILE="$dir/parked-pending.txt" \
+  FM_FAKE_QUOTA_PCT=0 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_FAKE_PANE_FILE="$dir/parked-pending.txt" \
     FM_FAKE_TMUX_CURSOR_Y=9 run_resume "$home" run || fail "run failed"
   sed -i 's/^resets_at=.*/resets_at=1/' "$home/state/.primary.limit-park"
   FM_FAKE_QUOTA_PCT=95 FM_FAKE_PANE_FILE="$dir/parked-pending.txt" FM_FAKE_TMUX_CURSOR_Y=9 \
@@ -596,7 +619,8 @@ test_run_defers_primary_injection_while_composer_holds_text() {
 test_unrecorded_primary_gets_durable_wake_and_bootstrap_line() {
   local home dir out
   home=$(make_home primary-unrecorded); dir=$(dirname "$home")
-  fm_limit_park_observe "$home/state" t1 "$PARKED_PANE" >/dev/null 2>&1 || true
+  FM_FAKE_QUOTA_PCT=0 FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
+    fm_limit_park_observe "$home/state" t1 "$PARKED_PANE" >/dev/null 2>&1 || true
   sed -i 's/^resets_at=.*/resets_at=1/' "$home/state/t1.limit-park"
   FM_FAKE_QUOTA_PCT=95 FM_FAKE_PANE_FILE="$dir/parked.txt" run_resume "$home" run || fail "run failed"
   [ "$(inbox_records "$home" t1)" = 1 ] || fail "the crew was not resumed while the primary is unrecorded"
@@ -728,10 +752,10 @@ test_usage_window_reset_kind_is_registered_and_distinct() {
 
 test_banner_fixture_classifies_parked
 test_pane_without_banner_is_not_parked
-test_banner_outside_the_pane_tail_is_not_parked
 test_reset_phrase_parses_to_next_wall_clock
 test_observe_records_park_and_clears_when_banner_gone
 test_observe_trusts_later_quota_reset_and_says_so
+test_healthy_window_refuses_to_open_a_park_for_displayed_banner_text
 test_crew_state_reports_parked_pane_as_paused
 test_watcher_treats_park_as_declared_wait_not_wedge
 test_daemon_classifies_park_as_pause

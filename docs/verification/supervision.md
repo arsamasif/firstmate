@@ -509,10 +509,10 @@ Observed output:
 0.1.30
 ok - fm_composer_claude_usage_limit: the live banner fixture, styled or plain, classifies as parked with its reset phrase
 ok - fm_composer_claude_usage_limit: the banner-free pane, a busy footer, a headline above a busy footer, and prose are not parked
-ok - fm_composer_claude_usage_limit: the banner counts only inside the pane tail, and the live fixture still parks
 ok - fm_limit_park_parse_reset: zoned and local phrases resolve to the next such wall clock; garbage is refused
 ok - fm_limit_park_observe: writes the record with the later of banner and quota-axi, keeps the episode on refresh, clears when the banner is gone
 ok - fm_limit_park_observe: a later quota-axi reset wins over the banner and the note says which was trusted
+ok - fm_limit_park_observe: a park opens only when the window the banner names corroborates it, and refusing poisons nothing
 ok - fm-crew-state: a parked Claude pane reports paused with the park detail; the same pane without the banner does not
 ok - fm-watch: an active park record is a declared wait (paused class) for the watcher; without it nothing is declared
 ok - fm-supervise-daemon: classify_stale routes a park record as a declared pause and a bare stale as before
@@ -534,7 +534,8 @@ ok - fm-operational-input: usage-window-reset is a registered kind distinct from
 
 Observed guarantee: the parked pane is a declared external wait with its reset time everywhere the fleet reads one, exactly one resume steer per park episode leaves through `bin/fm-send.sh` after the reset with a healthy window, a same-banner refresh past its reset becomes a new episode only when the live window still reads exhausted with a later reset, a weekly park and a headline above a busy footer are never steered, a recorded primary receives one guarded `usage-window-reset` input, an unrecorded primary receives a durable wake plus the bootstrap line, two scheduler installs leave one entry, and a stale beacon inside a recorded park is described as parked rather than as a lapsed watcher.
 The live banner fixture and the same pane without it are the positive and negative controls, so the classifier cannot go vacuous.
-The banner is read only inside the pane tail: the same words quoted in a transcript above a live prompt are not a park, while the live fixture still is, and a home whose path extends another home's never installs, reports, or uninstalls over its neighbour's crontab entry.
+The rendered banner is only a screen signal: a park record opens just when quota-axi reports the window the banner names as spent, so the same words quoted in a transcript beside a healthy window are not a park, and the refusal leaves nothing behind that stops the next observation from opening the real one.
+A home whose path extends another home's never installs, reports, or uninstalls over its neighbour's crontab entry.
 The rendered banner is a vendor surface; re-run `bin/fm-test-run.sh tests/fm-limit-resume.test.sh` after a Claude Code upgrade and refresh this record if the banner wording changes.
 
 ## Wedge-alarm channels

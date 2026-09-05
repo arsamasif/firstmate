@@ -18,6 +18,22 @@
 # only owner of the rendered shape. This file consumes its verdict and owns
 # everything that needs a clock, a time zone, or a file.
 #
+# Corroboration rule: the banner is only a SCREEN SIGNAL. A healthy worker that
+# reads this feature's own source, or greps for the hint text, renders those
+# words too, and a park verdict there would misreport a working crewmate as
+# paused and later steer it for nothing. So fm_limit_park_observe refuses to
+# OPEN a record when quota-axi is readable and the window the banner NAMES
+# still has more than FM_LIMIT_PARK_CORROBORATE_MAX_PCT remaining (five_hour
+# against quota-axi's five_hour row, weekly against its seven_day row, because
+# the two windows exhaust independently). An unreadable quota-axi, or output
+# carrying no row for that window, still ADMITS the park: a false park costs
+# one spurious steer, while the missed park of 2026-09-04 cost 7.9 idle hours.
+# The refusal is a clean no-op on disk - no marker, no episode, no negative
+# cache, no mutation of an existing record - so the next sweep, once quota-axi
+# has caught up with a real park, opens it normally. Refusing to OPEN is the
+# only gate: an already-open record keeps the refresh, re-reconcile, and clear
+# behaviour below unchanged.
+#
 # Record: state/<id>.limit-park - written by fm_limit_park_observe (the
 # watcher's per-poll capture and bin/fm-limit-resume.sh's tokenless sweep both
 # call it) and removed by the same function once the banner is gone, or by
@@ -115,6 +131,10 @@ FM_LIMIT_PARK_RECHECK_SECS=${FM_LIMIT_PARK_RECHECK_SECS:-300}
 # definition of "still exhausted".
 FM_LIMIT_RESUME_MIN_PCT=${FM_LIMIT_RESUME_MIN_PCT:-40}
 case "$FM_LIMIT_RESUME_MIN_PCT" in ''|*[!0-9]*) FM_LIMIT_RESUME_MIN_PCT=40 ;; esac
+# percentRemaining at or below which a rendered banner is corroborated, so a
+# park record may be OPENED: a genuine park sits at or near zero remaining.
+FM_LIMIT_PARK_CORROBORATE_MAX_PCT=${FM_LIMIT_PARK_CORROBORATE_MAX_PCT:-5}
+case "$FM_LIMIT_PARK_CORROBORATE_MAX_PCT" in ''|*[!0-9]*) FM_LIMIT_PARK_CORROBORATE_MAX_PCT=5 ;; esac
 # Test seam for the data-only quota source. Production never sets it.
 FM_LIMIT_QUOTA_BIN=${FM_LIMIT_QUOTA_BIN:-quota-axi}
 
@@ -242,19 +262,25 @@ fm_limit_park_iso_to_epoch() {  # <iso> <result-var>
   printf -v "$__fmie_var" '%s' "$__fmie_epoch"
 }
 
-# fm_limit_park_quota_window: read the five-hour window from quota-axi's
-# data-only TOON (row `claude,five_hour,session,<percentRemaining>,"<resetsAt>",...`).
+# fm_limit_park_quota_window [<window>]: read one account window from quota-axi's
+# data-only TOON (row `claude,<row-id>,<label>,<percentRemaining>,"<resetsAt>",...`).
+# <window> is the name the banner carries: `five_hour` (the default, quota-axi's
+# five_hour row) or `weekly` (its seven_day row).
 # Sets FM_LIMIT_QUOTA_PCT (whole percent) and FM_LIMIT_QUOTA_RESETS_AT (epoch);
 # 1 with both empty when the tool is absent, times out, or prints no such row.
 FM_LIMIT_QUOTA_PCT=
 FM_LIMIT_QUOTA_RESETS_AT=
-fm_limit_park_quota_window() {
-  local out row pct iso epoch
+fm_limit_park_quota_window() {  # [<window>]
+  local window=${1:-five_hour} rowid out row pct iso epoch
+  case "$window" in
+    weekly) rowid=seven_day ;;
+    *) rowid=five_hour ;;
+  esac
   FM_LIMIT_QUOTA_PCT=
   FM_LIMIT_QUOTA_RESETS_AT=
   command -v "$FM_LIMIT_QUOTA_BIN" >/dev/null 2>&1 || return 1
   out=$(fm_run_timed "$FM_LIMIT_QUOTA_TIMEOUT_SECS" "$FM_LIMIT_QUOTA_BIN" --full 2>/dev/null) || return 1
-  row=$(printf '%s\n' "$out" | LC_ALL=C grep -E '^[[:space:]]*claude,five_hour,' | head -1)
+  row=$(printf '%s\n' "$out" | LC_ALL=C grep -E "^[[:space:]]*claude,$rowid," | head -1)
   [ -n "$row" ] || return 1
   pct=$(printf '%s' "$row" | awk -F, '{print $4}')
   iso=$(printf '%s' "$row" | awk -F, '{print $5}' | tr -d '"')
@@ -430,15 +456,26 @@ _fm_limit_park_recheck() {  # <now>
 # fm_limit_park_observe <state> <id> <screen-text>
 # Classify one bounded capture. 0 = parked (record created or refreshed),
 # 1 = not parked (any record for <id> removed). A new episode consults
-# quota-axi once for the cross-check; a refresh only does so under the
-# re-reconcile rule above.
+# quota-axi once, for the corroboration gate and the cross-check together; a
+# refresh only does so under the re-reconcile rule above.
 fm_limit_park_observe() {  # <state> <id> <screen>
-  local state=$1 id=$2 screen=${3-} now reset='' banner='' window='' banner_epoch='' quota_epoch='' quota_pct=''
+  local state=$1 id=$2 screen=${3-} now reset='' banner='' window='' banner_epoch='' quota_epoch='' quota_pct='' quota_read=0
   local prev_episode prev_observed prev_reset
   now=$(fm_limit_park_now)
   if ! fm_composer_claude_usage_limit "$screen" reset banner window; then
     fm_limit_park_clear "$state" "$id"
     return 1
+  fi
+  if [ ! -e "$(fm_limit_park_record_path "$state" "$id")" ] && fm_limit_park_quota_window "$window"; then
+    if [ "$window" != weekly ]; then
+      quota_read=1
+      quota_pct=$FM_LIMIT_QUOTA_PCT
+      quota_epoch=$FM_LIMIT_QUOTA_RESETS_AT
+    fi
+    case "$FM_LIMIT_QUOTA_PCT" in
+      ''|*[!0-9]*) ;;
+      *) [ "$FM_LIMIT_QUOTA_PCT" -le "$FM_LIMIT_PARK_CORROBORATE_MAX_PCT" ] || return 1 ;;
+    esac
   fi
   if fm_limit_park_read "$state" "$id" && [ "$FM_LIMIT_PARK_BANNER_RESET" = "$reset" ] \
     && [ "$FM_LIMIT_PARK_WINDOW" = "$window" ]; then
@@ -457,7 +494,7 @@ fm_limit_park_observe() {  # <state> <id> <screen>
     _fm_limit_park_reconcile "$banner_epoch" ''
     FM_LIMIT_PARK_NOTE="weekly limit, not the five-hour window; a declared wait with no automatic resume (bin/fm-limit-resume.sh owns the five-hour window only)"
   else
-    if fm_limit_park_quota_window; then
+    if [ "$quota_read" = 0 ] && fm_limit_park_quota_window; then
       quota_pct=$FM_LIMIT_QUOTA_PCT
       quota_epoch=$FM_LIMIT_QUOTA_RESETS_AT
     fi

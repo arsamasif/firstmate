@@ -362,13 +362,16 @@ cron_tag() {
 # The tag closes the crontab line, so it is matched as a SUFFIX and never as a
 # substring: one home's tag is a prefix of every home whose path extends it
 # (/home/u/fm inside /home/u/fm-sm), and an unanchored match would disarm the
-# other home on install and report it armed on status. Compared literally, so a
-# path holding regex metacharacters is matched as written.
+# other home on install and report it armed on status. The tag reaches awk
+# through the ENVIRONMENT, never `-v`, which expands escape sequences: a home
+# path holding a backslash must be compared exactly as written.
 cron_tagged_lines() {  # <tag>; stdin -> this home's entries
-  awk -v tag="$1" 'length($0) >= length(tag) && substr($0, length($0) - length(tag) + 1) == tag'
+  FM_CRON_TAG=$1 awk 'BEGIN { tag = ENVIRON["FM_CRON_TAG"] }
+    length($0) >= length(tag) && substr($0, length($0) - length(tag) + 1) == tag'
 }
 cron_other_lines() {  # <tag>; stdin -> every line that is not this home's entry
-  awk -v tag="$1" 'length($0) < length(tag) || substr($0, length($0) - length(tag) + 1) != tag'
+  FM_CRON_TAG=$1 awk 'BEGIN { tag = ENVIRON["FM_CRON_TAG"] }
+    length($0) < length(tag) || substr($0, length($0) - length(tag) + 1) != tag'
 }
 run_cmd() {
   printf 'FM_HOME=%q %q run' "$FM_HOME" "$SCRIPT_DIR/fm-limit-resume.sh"
