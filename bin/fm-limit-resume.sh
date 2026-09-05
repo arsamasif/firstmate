@@ -108,9 +108,6 @@ MIN_PCT=$FM_LIMIT_RESUME_MIN_PCT
 . "$SCRIPT_DIR/fm-supervisor-target-lib.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
-# Durable wake queue (fm_wake_append) and fm_path_mtime for the beacon age.
-# shellcheck source=bin/fm-wake-lib.sh
-. "$SCRIPT_DIR/fm-wake-lib.sh"
 
 usage() {
   sed -n '2,70p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
@@ -310,6 +307,12 @@ append_reset_wake() {  # <summary>
 cmd_run() {
   local append_wake
   [ -d "$STATE" ] || { echo "error: state dir '$STATE' is missing for FM_HOME '$FM_HOME'" >&2; exit 1; }
+  # Durable wake queue (fm_wake_append) and fm_path_mtime for the beacon age.
+  # Sourced here, not at load: the library creates the state directory when it
+  # loads, and the read-only commands (bootstrap-lines under a detect-only
+  # bootstrap, status) must leave a home without one untouched.
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
   if feature_off; then
     exit 0
   fi

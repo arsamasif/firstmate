@@ -577,6 +577,28 @@ test_unrecorded_primary_gets_durable_wake_and_bootstrap_line() {
   pass "fm-limit-resume: an unreachable primary still gets its crews resumed, a durable wake, and the plain-language bootstrap line"
 }
 
+# A home that has no state directory is the detect-only bootstrap's case: that
+# pass is filesystem read-only, so the read-only subcommands must leave such a
+# home exactly as they found it. bin/fm-wake-lib.sh creates the directory when
+# it loads, so sourcing it at load time rather than inside the mutating command
+# silently breaks that contract.
+test_bootstrap_lines_leaves_a_stateless_home_untouched() {
+  local home out
+  home=$(make_home bootstrap-stateless)
+  rm -rf "$home/state"
+  out=$(run_resume "$home" bootstrap-lines) || fail "bootstrap-lines failed in a home with no state directory"
+  # Positive control: the command reached its work here, so the missing
+  # directory asserted next is not just the silence of a command that no-oped.
+  case "$out" in *"LIMIT_RESUME: not armed"*) ;; *) fail "bootstrap-lines printed no work: $out" ;; esac
+  [ ! -e "$home/state" ] || fail "detect-only bootstrap created its state directory"
+  # Discriminating control: the mutating command refuses the same home instead
+  # of creating the directory, so the assertion above is not trivially true of
+  # every subcommand.
+  ! run_resume "$home" run 2>/dev/null || fail "run should refuse a home with no state directory"
+  [ ! -e "$home/state" ] || fail "the refusing run created the state directory"
+  pass "fm-limit-resume: bootstrap-lines leaves a home with no state directory untouched, while run refuses it"
+}
+
 # --- 6. install/uninstall: idempotent, one entry ------------------------------
 
 test_install_cron_is_idempotent() {
@@ -669,6 +691,7 @@ test_run_never_touches_a_non_claude_or_unparked_task
 test_run_injects_reset_into_recorded_primary_pane
 test_run_defers_primary_injection_while_composer_holds_text
 test_unrecorded_primary_gets_durable_wake_and_bootstrap_line
+test_bootstrap_lines_leaves_a_stateless_home_untouched
 test_install_cron_is_idempotent
 test_install_systemd_is_idempotent
 test_guard_describes_park_instead_of_lapsed_watcher
