@@ -55,7 +55,12 @@
 # three facts together - a five-hour headline with a reset phrase, that reset
 # already passed, and a healthy live window - are the corroboration; none of
 # them alone opens anything, the resume owner checks the live window, and a
-# hint-only or weekly banner never takes this path.
+# hint-only or weekly banner never takes this path. The same inference guards
+# the ordinary opener: a five-hour record opened while the banner's named
+# clock already passed (an exhausted or lagging quota-axi admitting a park
+# first seen after its reset) reconciles the PASSED occurrence, not the
+# phantom next-day one, so quota-axi's live resetsAt wins under later-wins
+# and the record never waits a day on a clock the window cannot reach.
 #
 # Record: state/<id>.limit-park - written by fm_limit_park_observe (the
 # watcher's per-poll capture and bin/fm-limit-resume.sh's tokenless sweep both
@@ -500,7 +505,7 @@ _fm_limit_park_window_healthy() {  # <window>
 # a refresh only does so under the re-reconcile rule above.
 fm_limit_park_observe() {  # <state> <id> <screen>
   local state=$1 id=$2 screen=${3-} now reset='' banner='' window='' named='' banner_epoch='' quota_epoch='' quota_pct=''
-  local prev_episode prev_observed prev_reset
+  local prev_episode prev_observed prev_reset passed_epoch=''
   now=$(fm_limit_park_now)
   if ! fm_composer_claude_usage_limit "$screen" reset banner window named; then
     fm_limit_park_clear "$state" "$id"
@@ -526,6 +531,9 @@ fm_limit_park_observe() {  # <state> <id> <screen>
   prev_reset=$FM_LIMIT_PARK_RESETS_AT
   _fm_limit_park_reset_vars
   fm_limit_park_parse_reset "$reset" "$now" banner_epoch || banner_epoch=''
+  if [ "$window" = five_hour ] && fm_limit_park_banner_reset_passed "$reset" "$now" passed_epoch; then
+    banner_epoch=$passed_epoch
+  fi
   if [ "$window" = weekly ]; then
     _fm_limit_park_reconcile "$banner_epoch" ''
     FM_LIMIT_PARK_NOTE="weekly limit, not the five-hour window; a declared wait with no automatic resume (bin/fm-limit-resume.sh owns the five-hour window only)"

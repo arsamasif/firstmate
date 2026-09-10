@@ -363,19 +363,22 @@ test_reset_phrase_parses_to_next_wall_clock() {
 # --- 2. the record: observe writes, clears, and cross-checks ------------------
 
 test_observe_records_park_and_clears_when_banner_gone() {
-  local home dir
+  local home dir pane
   home=$(make_home observe); dir=$(dirname "$home")
+  # A banner naming a clock two hours ahead, inside the five-hour horizon at
+  # every hour the suite runs, so the later banner time is a live reset.
+  pane=$(banner_pane session 7200)
   FM_FAKE_QUOTA_PCT=0 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 600) FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" \
-    fm_limit_park_observe "$home/state" t1 "$PARKED_PANE" || fail "observe did not report parked"
+    fm_limit_park_observe "$home/state" t1 "$pane" || fail "observe did not report parked"
   assert_present "$home/state/t1.limit-park" "park record was not written"
   fm_limit_park_read "$home/state" t1 || fail "park record did not read back"
   [ -n "$FM_LIMIT_PARK_RESETS_AT" ] || fail "record carries no reconciled reset"
   [ "$FM_LIMIT_PARK_RESET_SOURCE" = banner ] \
-    || fail "banner (9pm NY) should be later than quota (+10min) and win: source=$FM_LIMIT_PARK_RESET_SOURCE"
+    || fail "banner (+2h) should be later than quota (+10min) and win: source=$FM_LIMIT_PARK_RESET_SOURCE"
   case "$FM_LIMIT_PARK_NOTE" in *"trusting the later banner time"*) ;; *) fail "disagreement was not logged in the record: '$FM_LIMIT_PARK_NOTE'" ;; esac
   # Refresh keeps the episode.
   local episode=$FM_LIMIT_PARK_EPISODE
-  FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" fm_limit_park_observe "$home/state" t1 "$PARKED_PANE" || fail "second observe not parked"
+  FM_LIMIT_QUOTA_BIN="$dir/fakebin/quota-axi" fm_limit_park_observe "$home/state" t1 "$pane" || fail "second observe not parked"
   fm_limit_park_read "$home/state" t1
   [ "$FM_LIMIT_PARK_EPISODE" = "$episode" ] || fail "refresh changed the episode identity"
   # Negative control: the banner-free pane clears the record.
@@ -713,6 +716,9 @@ test_stale_banner_with_no_record_is_resumed_once_after_its_reset_passed() {
   grep -q 'no-mistakes axi status' "$home/state/t1.inbox"/*.msg || fail "the stale-banner steer is not the standard resume text"
   grep -q 'resumed t1 from a stale banner (no record; reset .* passed, window healthy)' "$home/state/.limit-resume.log" \
     || fail "log does not record the stale-banner resume"
+  # The outage ended when that reset passed: no outage record whose from would
+  # lie after its until, even behind the stale beacon this home has.
+  assert_absent "$home/state/.limit-park-outage" "a stale-banner park wrote an already-over outage record"
   # Idempotent: a second sweep on the same pane sends nothing.
   FM_FAKE_QUOTA_PCT=98 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 17000) FM_FAKE_PANE_FILE="$dir/stale.txt" \
     FM_LIMIT_RESUME_MIN_GAP_SECS=0 run_resume "$home" run || fail "second run failed"
@@ -722,7 +728,7 @@ test_stale_banner_with_no_record_is_resumed_once_after_its_reset_passed() {
 }
 
 test_stale_banner_path_opens_nothing_without_all_three_facts() {
-  local home dir
+  local home dir live
   home=$(make_home run-stale-controls); dir=$(dirname "$home")
   banner_pane session -21600 > "$dir/stale.txt"
   banner_pane session 7200 > "$dir/ahead.txt"
@@ -730,11 +736,21 @@ test_stale_banner_path_opens_nothing_without_all_three_facts() {
   # POSITIVE CONTROL for the exhausted case: the same stale banner while quota
   # reads exhausted is a real park recorded by today's path, so nothing is sent
   # and no receipt is written.
+  live=$(( $(date +%s) + 3600 ))
   FM_FAKE_QUOTA_PCT=0 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 3600) FM_FAKE_PANE_FILE="$dir/stale.txt" \
     run_resume "$home" run || fail "run failed"
   assert_present "$home/state/t1.limit-park" "an exhausted window did not record the park"
   fm_limit_park_read "$home/state" t1 || fail "record unreadable"
   case "$FM_LIMIT_PARK_NOTE" in *"stale banner"*) fail "an exhausted window took the stale-banner path" ;; esac
+  # The banner's clock already passed, so the record must wait on quota-axi's
+  # live reset, never on the phantom next-day occurrence of that clock.
+  case "$FM_LIMIT_PARK_RESETS_AT" in ''|*[!0-9]*) fail "an exhausted window left no reconciled reset" ;; esac
+  [ "$FM_LIMIT_PARK_RESETS_AT" -ge $((live - 5)) ] && [ "$FM_LIMIT_PARK_RESETS_AT" -le $((live + 5)) ] \
+    || fail "the record's reset $FM_LIMIT_PARK_RESETS_AT is not quota-axi's live reset $live"
+  [ $((FM_LIMIT_PARK_RESETS_AT - $(date +%s))) -le 18000 ] \
+    || fail "the record waits more than one five-hour window on a passed banner clock: $FM_LIMIT_PARK_RESETS_AT"
+  [ "$FM_LIMIT_PARK_RESET_SOURCE" = quota ] || fail "reset_source is '$FM_LIMIT_PARK_RESET_SOURCE', not quota"
+  [ "$FM_LIMIT_PARK_BANNER_RESETS_AT" -le "$(date +%s)" ] || fail "the banner's reset was recorded as a future occurrence: $FM_LIMIT_PARK_BANNER_RESETS_AT"
   [ "$(inbox_records "$home" t1)" = 0 ] || fail "a steer went out on an exhausted window"
   assert_absent "$home/state/t1.limit-park.resumed" "an exhausted window produced a receipt"
   ! grep -q 'from a stale banner' "$home/state/.limit-resume.log" || fail "the log claims a stale-banner resume on an exhausted window"

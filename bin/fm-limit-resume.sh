@@ -56,7 +56,9 @@
 # healthy)`. None of the three alone opens anything: a banner whose reset has
 # not passed, a hint-only or weekly banner, an exhausted or unreadable window,
 # and a task that already has a record all keep the behaviour above, and the
-# marker keeps a second sweep on the same pane silent.
+# marker keeps a second sweep on the same pane silent. A stale-banner park
+# writes no outage record: that outage ended when its reset passed, and the
+# record owner's outage contract runs from the first sighting to the reset.
 # Then it looks at the primary itself through the pane recorded by
 # `record-primary`:
 #   - primary pane reachable and showing the banner: the park is recorded under
@@ -142,7 +144,7 @@ MIN_PCT=$FM_LIMIT_RESUME_MIN_PCT
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 
 usage() {
-  sed -n '2,110p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,112p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 }
 
 log() {
@@ -278,7 +280,7 @@ resume_crews() {
       stale=1
     fi
     PARKED=$((PARKED + 1))
-    if [ "$(beacon_age)" -gt "$GRACE" ]; then
+    if [ "$stale" -eq 0 ] && [ "$(beacon_age)" -gt "$GRACE" ]; then
       fm_limit_park_outage_write "$STATE" "$FM_LIMIT_PARK_OBSERVED_AT" "$FM_LIMIT_PARK_RESETS_AT" "crew:$id" || true
     fi
     window_ready "$id" || continue
