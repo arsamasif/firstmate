@@ -932,6 +932,20 @@ test_install_names_why_systemd_was_skipped() {
   pass "fm-limit-resume install: without a user bus it arms crontab and names the reason plus the linger fix, status repeats it, and a returned bus is preferred again"
 }
 
+test_install_credits_the_scheduler_request_source() {
+  local home dir out
+  home=$(make_home install-source); dir=$(dirname "$home")
+  out=$(FM_LIMIT_RESUME_SCHEDULER=cron run_resume "$home" install 2>&1) || fail "install with the env var failed: $out"
+  case "$out" in *"scheduler: crontab (requested by FM_LIMIT_RESUME_SCHEDULER)"*) ;; *) fail "install did not credit the env var: $out" ;; esac
+  out=$(FM_LIMIT_RESUME_SCHEDULER=systemd run_resume "$home" install --scheduler cron 2>&1) || fail "install with the flag overriding the env var failed: $out"
+  case "$out" in *"scheduler: crontab (requested by --scheduler)"*) ;; *) fail "install credited the wrong source when --scheduler overrode the env var: $out" ;; esac
+  case "$out" in *"requested by FM_LIMIT_RESUME_SCHEDULER"*) fail "install credited an env var that asked for systemd: $out" ;; esac
+  out=$(FM_LIMIT_RESUME_SCHEDULER=cron run_resume "$home" install --scheduler=systemd 2>&1) || fail "install with --scheduler= overriding the env var failed: $out"
+  case "$out" in *"scheduler: systemd user timer (requested by --scheduler)"*) ;; *) fail "install --scheduler= did not credit the flag: $out" ;; esac
+  run_resume "$home" uninstall >/dev/null || fail "uninstall failed"
+  pass "fm-limit-resume install: the 'requested by' source is the env var only when no --scheduler flag overrode it"
+}
+
 test_install_cron_reports_length_when_crontab_refuses() {
   local home dir out seg deep
   seg=$(printf 'x%.0s' $(seq 1 200))
@@ -1022,6 +1036,7 @@ test_bootstrap_lines_leaves_a_stateless_home_untouched
 test_install_cron_is_idempotent
 test_install_cron_stays_short_under_pathological_path
 test_install_names_why_systemd_was_skipped
+test_install_credits_the_scheduler_request_source
 test_install_cron_reports_length_when_crontab_refuses
 test_install_systemd_is_idempotent
 test_guard_describes_park_instead_of_lapsed_watcher

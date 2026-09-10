@@ -536,11 +536,12 @@ uninstall_cron() {
 }
 
 cmd_install() {
-  local scheduler=${FM_LIMIT_RESUME_SCHEDULER:-}
+  local scheduler=${FM_LIMIT_RESUME_SCHEDULER:-} source=
+  [ -z "$scheduler" ] || source=FM_LIMIT_RESUME_SCHEDULER
   while [ $# -gt 0 ]; do
     case "$1" in
-      --scheduler) [ $# -ge 2 ] || { usage; exit 2; }; scheduler=$2; shift 2 ;;
-      --scheduler=*) scheduler=${1#--scheduler=}; shift ;;
+      --scheduler) [ $# -ge 2 ] || { usage; exit 2; }; scheduler=$2; source=--scheduler; shift 2 ;;
+      --scheduler=*) scheduler=${1#--scheduler=}; source=--scheduler; shift ;;
       *) usage; exit 2 ;;
     esac
   done
@@ -555,7 +556,7 @@ cmd_install() {
       exit 1
     fi
   else
-    why="requested by ${FM_LIMIT_RESUME_SCHEDULER:+FM_LIMIT_RESUME_SCHEDULER}${FM_LIMIT_RESUME_SCHEDULER:---scheduler}"
+    why="requested by $source"
   fi
   case "$scheduler" in
     systemd)
