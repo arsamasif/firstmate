@@ -866,12 +866,13 @@ test_install_cron_is_idempotent() {
 # 2026-09-10 WSL defect inlined an 8 KB PATH and cron refused the line, so
 # the standing rule "work resumes by itself" was silently unarmed.
 CRON_LINE_BOUND=600
-pathological_path() {  # -> a PATH over 8 KB of plausible directories
-  local p=$PATH i
-  for i in $(seq 1 120); do
-    p="$p:/mnt/c/Program Files/Vendor Number $i/Some Product/bin"
+pathological_path() {  # -> the real PATH behind over 8 KB of plausible directories
+  local synthetic='' i=0
+  while [ "${#synthetic}" -le 8192 ]; do
+    i=$((i + 1))
+    synthetic="$synthetic/mnt/c/Program Files/Vendor Number $i/Some Product/bin:"
   done
-  printf '%s' "$p"
+  printf '%s%s' "$synthetic" "$PATH"
 }
 
 test_install_cron_stays_short_under_pathological_path() {
