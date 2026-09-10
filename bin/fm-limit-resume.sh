@@ -73,14 +73,15 @@
 # missing and lingering is off. `status` repeats that reason while the
 # crontab entry is the arming, or says the timer became usable so install can
 # be re-run to prefer it.
-# The scheduler runs `run` with FM_HOME pinned and a MINIMAL explicit PATH,
-# never the installing shell's whole PATH: the crontab line is resolved at
-# install time from the directory of this script plus the directory of each
-# tool the sweep needs that is on PATH then (tmux, quota-axi, git, node, gh,
-# herdr, cmux, zellij), deduplicated, followed by /usr/local/bin:/usr/bin:/bin,
-# so the line stays a few hundred bytes however long the host PATH is (a WSL
-# PATH carrying every Windows directory used to exceed cron's line limit and
-# left the sweep silently unarmed). A crontab that still refuses the entry is
+# Both schedulers run `run` with FM_HOME pinned. The systemd unit keeps
+# pinning the installing shell's whole PATH (systemd has no line limit); the
+# CRONTAB entry instead carries a MINIMAL explicit PATH resolved at install
+# time from the directory of this script plus the directory of each tool the
+# sweep needs that is on PATH then (tmux, quota-axi, git, node, gh, herdr,
+# cmux, zellij), deduplicated, followed by /usr/local/bin:/usr/bin:/bin, so the
+# line stays a few hundred bytes however long the host PATH is (a WSL PATH
+# carrying every Windows directory used to exceed cron's line limit and left
+# the sweep silently unarmed). A crontab that still refuses the entry is
 # reported with the entry's byte length and crontab's own reason. `uninstall`
 # removes the entry from both schedulers. config/limit-resume containing `off`
 # makes `run` a no-op and silences bootstrap-lines, for a home that does not
@@ -125,7 +126,7 @@ MIN_PCT=$FM_LIMIT_RESUME_MIN_PCT
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 
 usage() {
-  sed -n '2,93p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,94p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 }
 
 log() {
