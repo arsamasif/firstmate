@@ -494,6 +494,7 @@ tests/fm-turnend-guard.test.sh
 
 Recorded 2026-09-05 against the live incident of 2026-09-04, when every Claude worker and the Claude primary parked on the shared five-hour window and nothing resumed for 7.9 hours.
 Re-run 2026-09-10 with the same Claude Code and quota-axi versions after the scheduler install learned to keep the crontab entry short and to name the scheduler it armed.
+Re-run again on 2026-09-10 after the sweep learned to resume a five-hour banner that has no park record once its own reset has passed and the live window reads healthy (incident 2026-09-10, a worker parked while no watcher was alive to record it); the old-shape crontab byte count in the output varies with the host PATH and worktree path.
 The banner fixture is the exact rendered text from that pane; the installed Claude Code when the shape was recorded was 2.1.261 and quota-axi was 0.1.30.
 No credential material was copied into a fixture, and every case runs in a throwaway home with a fake tmux, a fake quota-axi, and fake schedulers.
 
@@ -526,12 +527,14 @@ ok - fm-limit-resume run: a same-banner refresh after a passed reset re-reads qu
 ok - fm-limit-resume run: a weekly park is recorded as a declared wait that says it is not resumed, is never steered, and the five-hour banner in the same home still is
 ok - fm-limit-resume run: a record with no reconciled reset waits on an exhausted live window and resumes on a healthy one without waiting for the next window's end
 ok - fm-limit-resume run: idle Claude tasks and non-Claude tasks are left alone
+ok - fm-limit-resume run: a five-hour banner with no record, a passed reset, and a healthy window is resumed exactly once, and a second sweep sends nothing
+ok - fm-limit-resume run: an exhausted window, an unpassed reset, a weekly banner, and a hint-only banner never take the stale-banner path
 ok - fm-limit-resume run: a parked, recorded primary receives exactly one guarded usage-window-reset input after the reset, plus one durable wake
 ok - fm-limit-resume run: the composer guard defers the primary input while the composer holds text, and retries next sweep
 ok - fm-limit-resume: an unreachable primary still gets its crews resumed, a durable wake, and the plain-language bootstrap line
 ok - fm-limit-resume: bootstrap-lines leaves a home with no state directory untouched, while run refuses it
 ok - fm-limit-resume install --scheduler cron: two installs leave one tagged entry, foreign lines and a sibling home's entry survive, uninstall is idempotent
-ok - fm-limit-resume install --scheduler cron: an 8 KB host PATH leaves a 465-byte entry, re-install replaces it, uninstall removes it (control: the old shape is 12360 bytes and refused)
+ok - fm-limit-resume install --scheduler cron: an 8 KB host PATH leaves a 465-byte entry, re-install replaces it, uninstall removes it (control: the old shape is 12195 bytes and refused)
 ok - fm-limit-resume install: without a user bus it arms crontab and names the reason plus the linger fix, status repeats it, and a returned bus is preferred again
 ok - fm-limit-resume install: the 'requested by' source is the env var only when no --scheduler flag overrode it
 ok - fm-limit-resume install --scheduler cron: a refused entry is reported with its byte length and cron's reason, never as armed
@@ -540,7 +543,7 @@ ok - fm-guard: a stale beacon inside a recorded park window reads as parked on t
 ok - fm-operational-input: usage-window-reset is a registered kind distinct from a captain message and an away escalation
 ```
 
-Observed guarantee: the parked pane is a declared external wait with its reset time everywhere the fleet reads one, exactly one resume steer per park episode leaves through `bin/fm-send.sh` after the reset with a healthy window, a same-banner refresh past its reset becomes a new episode only when the live window still reads exhausted with a later reset, a weekly park and a headline above a busy footer are never steered, a recorded primary receives one guarded `usage-window-reset` input, an unrecorded primary receives a durable wake plus the bootstrap line, two scheduler installs leave one entry, a crontab entry stays a few hundred bytes under an 8 KB host PATH while the old inlined-PATH shape exceeds cron's limit, install and status name the scheduler and why the systemd user timer was skipped, a refused crontab entry is reported with its length and never as armed, and a stale beacon inside a recorded park is described as parked rather than as a lapsed watcher.
+Observed guarantee: the parked pane is a declared external wait with its reset time everywhere the fleet reads one, exactly one resume steer per park episode leaves through `bin/fm-send.sh` after the reset with a healthy window, a same-banner refresh past its reset becomes a new episode only when the live window still reads exhausted with a later reset, a five-hour banner with no record is resumed exactly once when its own reset has passed and the live window reads healthy while an exhausted window, an unpassed reset, a weekly banner, and a hint-only banner never take that path, a weekly park and a headline above a busy footer are never steered, a recorded primary receives one guarded `usage-window-reset` input, an unrecorded primary receives a durable wake plus the bootstrap line, two scheduler installs leave one entry, a crontab entry stays a few hundred bytes under an 8 KB host PATH while the old inlined-PATH shape exceeds cron's limit, install and status name the scheduler and why the systemd user timer was skipped, a refused crontab entry is reported with its length and never as armed, and a stale beacon inside a recorded park is described as parked rather than as a lapsed watcher.
 The live banner fixture and the same pane without it are the positive and negative controls, so the classifier cannot go vacuous.
 The rendered banner is only a screen signal, and the record owner decides whether a park is real.
 A record opens when the window the banner's headline names still reads spent, when quota-axi cannot be read or carries no row for that window, or - for a hint-only capture, which names no window at all - when either the five-hour or the weekly row still reads spent.

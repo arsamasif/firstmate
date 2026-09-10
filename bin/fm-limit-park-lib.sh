@@ -41,9 +41,31 @@
 # only gate: an already-open record keeps the refresh, re-reconcile, and clear
 # behaviour below unchanged.
 #
+# Stale-banner rule (incident 2026-09-10): a worker that parked while no
+# watcher was alive to record it keeps rendering the same banner after the
+# window has reset, and by then quota-axi reads healthy, so the gate above
+# refuses it forever and nothing resumes it. fm_limit_park_banner_reset_passed
+# decides when the banner's own five-hour reset lies in the PAST: the banner
+# names only a wall clock, and a five-hour window never ends more than
+# FM_LIMIT_PARK_WINDOW_SECS after the park began, so a next occurrence of that
+# clock further ahead than the window is long proves the named time already
+# passed. fm_limit_park_open_stale then opens the record for that passed reset
+# (window five_hour, reset_source=banner, note naming the stale banner) so
+# the resume owner's ordinary one-steer-per-episode path runs against it. The
+# three facts together - a five-hour headline with a reset phrase, that reset
+# already passed, and a healthy live window - are the corroboration; none of
+# them alone opens anything, the resume owner checks the live window, and a
+# hint-only or weekly banner never takes this path. The same inference guards
+# the ordinary opener: a five-hour record opened while the banner's named
+# clock already passed (an exhausted or lagging quota-axi admitting a park
+# first seen after its reset) reconciles the PASSED occurrence, not the
+# phantom next-day one, so quota-axi's live resetsAt wins under later-wins
+# and the record never waits a day on a clock the window cannot reach.
+#
 # Record: state/<id>.limit-park - written by fm_limit_park_observe (the
 # watcher's per-poll capture and bin/fm-limit-resume.sh's tokenless sweep both
-# call it) and removed by the same function once the banner is gone, or by
+# call it), or by fm_limit_park_open_stale under the stale-banner rule above,
+# and removed by fm_limit_park_observe once the banner is gone, or by
 # teardown. One `key=value` line per field, private (mode 0600):
 #   v1
 #   episode=<epoch>          identity of this park episode: the reconciled reset
@@ -102,6 +124,11 @@
 # ignored once `until` plus FM_LIMIT_OUTAGE_GRACE_SECS has passed, so a genuine
 # lapse after the reset alarms exactly as before:
 #   from=<epoch> until=<epoch|> observed_at=<epoch> source=<primary|crew:<id>>
+# Already-over rule: a park whose first sighting lies AFTER its reconciled
+# reset (a stale-banner park, its later refreshes, or a park first seen once
+# quota-axi's lagging reset had passed) names an outage that has ended, so
+# fm_limit_park_outage_write writes nothing for it rather than a record whose
+# `from` lies after its `until`; the guard never describes such a park.
 #
 # Primary pane record: state/.primary-pane - written by locked session start
 # through bin/fm-limit-resume.sh record-primary using the ONE supervisor-pane
@@ -133,6 +160,10 @@ FM_LIMIT_QUOTA_TIMEOUT_SECS=${FM_LIMIT_QUOTA_TIMEOUT_SECS:-15}
 FM_LIMIT_OUTAGE_GRACE_SECS=${FM_LIMIT_OUTAGE_GRACE_SECS:-3600}
 # Floor between two quota-axi re-reads for one record whose reset has passed.
 FM_LIMIT_PARK_RECHECK_SECS=${FM_LIMIT_PARK_RECHECK_SECS:-300}
+# How long the five-hour window lasts: the horizon past which a banner's next
+# named clock time cannot be a future reset (the stale-banner rule above).
+FM_LIMIT_PARK_WINDOW_SECS=${FM_LIMIT_PARK_WINDOW_SECS:-18000}
+case "$FM_LIMIT_PARK_WINDOW_SECS" in ''|*[!0-9]*) FM_LIMIT_PARK_WINDOW_SECS=18000 ;; esac
 # quota-axi five_hour percentRemaining at or above which the window reads
 # healthy: the resume owner's steer floor and the re-reconcile rule's one
 # definition of "still exhausted".
@@ -480,7 +511,7 @@ _fm_limit_park_window_healthy() {  # <window>
 # a refresh only does so under the re-reconcile rule above.
 fm_limit_park_observe() {  # <state> <id> <screen>
   local state=$1 id=$2 screen=${3-} now reset='' banner='' window='' named='' banner_epoch='' quota_epoch='' quota_pct=''
-  local prev_episode prev_observed prev_reset
+  local prev_episode prev_observed prev_reset passed_epoch=''
   now=$(fm_limit_park_now)
   if ! fm_composer_claude_usage_limit "$screen" reset banner window named; then
     fm_limit_park_clear "$state" "$id"
@@ -506,6 +537,9 @@ fm_limit_park_observe() {  # <state> <id> <screen>
   prev_reset=$FM_LIMIT_PARK_RESETS_AT
   _fm_limit_park_reset_vars
   fm_limit_park_parse_reset "$reset" "$now" banner_epoch || banner_epoch=''
+  if [ "$window" = five_hour ] && fm_limit_park_banner_reset_passed "$reset" "$now" passed_epoch; then
+    banner_epoch=$passed_epoch
+  fi
   if [ "$window" = weekly ]; then
     _fm_limit_park_reconcile "$banner_epoch" ''
     FM_LIMIT_PARK_NOTE="weekly limit, not the five-hour window; a declared wait with no automatic resume (bin/fm-limit-resume.sh owns the five-hour window only)"
@@ -536,6 +570,50 @@ fm_limit_park_observe() {  # <state> <id> <screen>
     FM_LIMIT_PARK_EPISODE=$prev_episode
     FM_LIMIT_PARK_OBSERVED_AT=$prev_observed
   fi
+  _fm_limit_park_write "$state" "$id"
+}
+
+# fm_limit_park_banner_reset_passed <raw-phrase> <now-epoch> <result-var>
+# The stale-banner rule from the header: 0 when the banner's named clock time
+# already passed, with <result-var> receiving that passed occurrence's epoch;
+# 1 (empty result) when the phrase is empty or unparsable, or when its next
+# occurrence lies within one five-hour window and may still be a live reset.
+fm_limit_park_banner_reset_passed() {  # <raw-phrase> <now> <result-var>
+  local __fmbp_raw=${1-} __fmbp_now=${2-} __fmbp_var=${3-} __fmbp_next='' __fmbp_prev=''
+  [ -n "$__fmbp_var" ] || return 2
+  printf -v "$__fmbp_var" '%s' ''
+  [ -n "$__fmbp_raw" ] || return 1
+  case "$__fmbp_now" in ''|*[!0-9]*) __fmbp_now=$(fm_limit_park_now) ;; esac
+  fm_limit_park_parse_reset "$__fmbp_raw" "$__fmbp_now" __fmbp_next || return 1
+  [ $((__fmbp_next - __fmbp_now)) -gt "$FM_LIMIT_PARK_WINDOW_SECS" ] || return 1
+  fm_limit_park_parse_reset "$__fmbp_raw" $((__fmbp_now - 86400)) __fmbp_prev || return 1
+  [ "$__fmbp_prev" -le "$__fmbp_now" ] || return 1
+  printf -v "$__fmbp_var" '%s' "$__fmbp_prev"
+}
+
+# fm_limit_park_open_stale <state> <id> <screen-text> <now-epoch>
+# Open the record for a five-hour banner whose reset already passed (the
+# stale-banner rule). 0 when written; 1 when a record already exists, the
+# capture is not a five-hour headline carrying a reset phrase, or that reset
+# has not passed. Whether the live window reads healthy is the caller's check.
+fm_limit_park_open_stale() {  # <state> <id> <screen> <now>
+  local state=$1 id=$2 screen=${3-} now=${4-} reset='' banner='' window='' named='' passed=''
+  case "$now" in ''|*[!0-9]*) now=$(fm_limit_park_now) ;; esac
+  [ ! -e "$(fm_limit_park_record_path "$state" "$id")" ] || return 1
+  fm_composer_claude_usage_limit "$screen" reset banner window named || return 1
+  [ "$named" = 1 ] && [ "$window" = five_hour ] && [ -n "$reset" ] || return 1
+  fm_limit_park_banner_reset_passed "$reset" "$now" passed || return 1
+  _fm_limit_park_reset_vars
+  FM_LIMIT_PARK_EPISODE=$passed
+  FM_LIMIT_PARK_OBSERVED_AT=$now
+  FM_LIMIT_PARK_LAST_SEEN=$now
+  FM_LIMIT_PARK_WINDOW=five_hour
+  FM_LIMIT_PARK_BANNER=$banner
+  FM_LIMIT_PARK_BANNER_RESET=$reset
+  FM_LIMIT_PARK_BANNER_RESETS_AT=$passed
+  FM_LIMIT_PARK_RESETS_AT=$passed
+  FM_LIMIT_PARK_RESET_SOURCE=banner
+  FM_LIMIT_PARK_NOTE="stale banner: no record existed when its reset $(fm_limit_park_fmt_epoch "$passed") passed (no watcher was alive to record the park) and the live window reads healthy; opened for the ordinary resume"
   _fm_limit_park_write "$state" "$id"
 }
 
@@ -640,8 +718,14 @@ fm_limit_park_outage_read() {  # <state>
 # fm_limit_park_outage_write <state> <from> <until|> <source>
 # Create-or-extend: an existing record keeps its earlier `from` and takes the
 # later `until`, so one long park is one outage, not a fresh one per sweep.
+# A sighting whose `from` already lies after its `until` is an outage that is
+# over (the header's already-over rule): 0 with nothing written.
 fm_limit_park_outage_write() {  # <state> <from> <until|> <source>
   local state=$1 from=$2 until=${3-} source=$4 path tmp
+  case "$until" in
+    ''|*[!0-9]*) ;;
+    *) case "$from" in ''|*[!0-9]*) ;; *) [ "$from" -le "$until" ] || return 0 ;; esac ;;
+  esac
   path=$(fm_limit_park_outage_path "$state")
   if fm_limit_park_outage_read "$state"; then
     [ -n "$FM_LIMIT_OUTAGE_FROM" ] && [ "$FM_LIMIT_OUTAGE_FROM" -lt "$from" ] && from=$FM_LIMIT_OUTAGE_FROM

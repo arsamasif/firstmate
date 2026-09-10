@@ -41,6 +41,24 @@
 #      raw send-keys) and writes the episode's resumed marker, so a second run
 #      inside the same episode sends nothing; FM_LIMIT_RESUME_MIN_GAP_SECS
 #      (default 1800) is a further backstop between two sends to one task.
+# A worker that parked while NO watcher was alive to record it (the primary
+# parked on the same limit, incident 2026-09-10) has no record once the window
+# resets, and the record owner's corroboration gate then refuses its banner
+# forever because quota-axi reads healthy. The sweep treats that capture as a
+# STALE-BANNER PARK when all three hold at once: the pane shows a five-hour
+# headline with a reset phrase and no record exists; that reset already passed
+# (bin/fm-limit-park-lib.sh's fm_limit_park_banner_reset_passed owns the
+# five-hour-horizon inference); and the live five_hour window reads healthy
+# (>= FM_LIMIT_RESUME_MIN_PCT). It then opens the record for the passed reset
+# (fm_limit_park_open_stale), sends the same single resume steer through the
+# path above, writes the same resumed marker, and logs
+# `resumed <id> from a stale banner (no record; reset <time> passed, window
+# healthy)`. None of the three alone opens anything: a banner whose reset has
+# not passed, a hint-only or weekly banner, an exhausted or unreadable window,
+# and a task that already has a record all keep the behaviour above, and the
+# marker keeps a second sweep on the same pane silent. A stale-banner park
+# leaves no outage record on any sweep: its first sighting lies after its
+# reset, and the record owner's already-over rule writes nothing for that.
 # Then it looks at the primary itself through the pane recorded by
 # `record-primary`:
 #   - primary pane reachable and showing the banner: the park is recorded under
@@ -126,7 +144,7 @@ MIN_PCT=$FM_LIMIT_RESUME_MIN_PCT
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 
 usage() {
-  sed -n '2,94p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,112p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 }
 
 log() {
@@ -224,11 +242,27 @@ already_resumed() {  # <id>
   return 1
 }
 
+# open_stale_banner_park <id> <screen>: the stale-banner park from the header.
+# 0 when a record was opened for a passed reset on a healthy live window; the
+# record owner decides the banner and reset facts, this checks the window.
+open_stale_banner_park() {  # <id> <screen>
+  local id=$1 screen=$2
+  [ ! -e "$(fm_limit_park_record_path "$STATE" "$id")" ] || return 1
+  fm_composer_claude_usage_limit "$screen" || return 1
+  quota_once
+  [ "$QUOTA_OK" -eq 1 ] || return 1
+  case "$QUOTA_PCT" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$QUOTA_PCT" -ge "$MIN_PCT" ] || return 1
+  fm_limit_park_open_stale "$STATE" "$id" "$screen" "$(date +%s)" || return 1
+  log "$id shows a stale usage-limit banner with no record: its reset $(fm_limit_park_fmt_epoch "$FM_LIMIT_PARK_RESETS_AT") passed and the window reads ${QUOTA_PCT}%; opened the park for the ordinary resume"
+  return 0
+}
+
 # --- crew sweep --------------------------------------------------------------
 RESUMED=0
 PARKED=0
 resume_crews() {
-  local meta id harness remote backend target screen out rc
+  local meta id harness remote backend target screen out rc stale
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
     id=$(basename "$meta" .meta)
@@ -240,7 +274,11 @@ resume_crews() {
     target=$(fm_backend_target_of_meta "$meta")
     [ -n "$target" ] || continue
     screen=$(fm_backend_capture "$backend" "$target" 40 "fm-$id" 2>/dev/null) || continue
-    fm_limit_park_observe "$STATE" "$id" "$screen" || continue
+    stale=0
+    if ! fm_limit_park_observe "$STATE" "$id" "$screen"; then
+      open_stale_banner_park "$id" "$screen" || continue
+      stale=1
+    fi
     PARKED=$((PARKED + 1))
     if [ "$(beacon_age)" -gt "$GRACE" ]; then
       fm_limit_park_outage_write "$STATE" "$FM_LIMIT_PARK_OBSERVED_AT" "$FM_LIMIT_PARK_RESETS_AT" "crew:$id" || true
@@ -252,7 +290,11 @@ resume_crews() {
     if [ "$rc" -eq 0 ]; then
       fm_limit_park_resumed_write "$STATE" "$id" "$FM_LIMIT_PARK_EPISODE" "$FM_LIMIT_PARK_RESETS_AT"
       RESUMED=$((RESUMED + 1))
-      log "resumed $id after the usage window reset ($(fm_limit_park_fmt_epoch "$FM_LIMIT_PARK_RESETS_AT")): steer recorded"
+      if [ "$stale" -eq 1 ]; then
+        log "resumed $id from a stale banner (no record; reset $(fm_limit_park_fmt_epoch "$FM_LIMIT_PARK_RESETS_AT") passed, window healthy)"
+      else
+        log "resumed $id after the usage window reset ($(fm_limit_park_fmt_epoch "$FM_LIMIT_PARK_RESETS_AT")): steer recorded"
+      fi
     else
       log "resume steer to $id failed (rc=$rc): $(printf '%s' "$out" | tail -1)"
     fi
