@@ -1,0 +1,36 @@
+== host PATH handed to install: 12124 bytes, no user bus (XDG_RUNTIME_DIR=/tmp/fm-limit-resume-demo.rCDpNW/no-runtime absent), lingering off
+
+== BEFORE (base 2cf6d0f): bin/fm-limit-resume.sh install
+"-":1: command too long
+errors in crontab file, can't install.
+[exit 1]
+-- crontab after BEFORE install:
+(empty: nothing armed)
+
+== AFTER (fixed): bin/fm-limit-resume.sh install
+armed: crontab entry (every 5 minutes)
+scheduler: crontab (systemd user timer skipped: no user systemd bus under /tmp/fm-limit-resume-demo.rCDpNW/no-runtime (this shell was not started through a login that runs a user manager, and lingering is off; fix: loginctl enable-linger pending, then log in again))
+[exit 0]
+-- crontab after AFTER install:
+*/5 * * * * PATH=/home/pending/.no-mistakes/worktrees/84c683ef0f4c/01M2541F8B73TERBR8DT7ECQV0/bin:/tmp/fm-limit-resume-demo.rCDpNW/fakebin:/usr/bin:/usr/local/bin:/home/pending/.local/bin:/bin FM_HOME=/tmp/fm-limit-resume-demo.rCDpNW/home /home/pending/.no-mistakes/worktrees/84c683ef0f4c/01M2541F8B73TERBR8DT7ECQV0/bin/fm-limit-resume.sh run >/dev/null 2>&1 # firstmate-limit-resume home=/tmp/fm-limit-resume-demo.rCDpNW/home
+-- entry length: 426 bytes
+
+== AFTER: bin/fm-limit-resume.sh status
+usage-limit resume: armed (crontab entry)
+scheduler: crontab; systemd user timer skipped: no user systemd bus under /tmp/fm-limit-resume-demo.rCDpNW/no-runtime (this shell was not started through a login that runs a user manager, and lingering is off; fix: loginctl enable-linger pending, then log in again)
+primary pane: not recorded (this session cannot be resumed by typing; see bootstrap-lines)
+[exit 0]
+
+== AFTER: install again (idempotent re-install)
+armed: crontab entry (every 5 minutes)
+scheduler: crontab (systemd user timer skipped: no user systemd bus under /tmp/fm-limit-resume-demo.rCDpNW/no-runtime (this shell was not started through a login that runs a user manager, and lingering is off; fix: loginctl enable-linger pending, then log in again))
+[exit 0]
+-- tagged entries in crontab: 1
+
+== AFTER: uninstall, then status
+disarmed: crontab entry
+[exit 0]
+-- tagged entries in crontab: 0
+usage-limit resume: not armed (run bin/fm-limit-resume.sh install)
+primary pane: not recorded (this session cannot be resumed by typing; see bootstrap-lines)
+[exit 0]

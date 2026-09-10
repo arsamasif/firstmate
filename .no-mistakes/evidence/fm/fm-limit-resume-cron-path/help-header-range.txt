@@ -1,0 +1,38 @@
+== bin/fm-limit-resume.sh --help : last 6 lines (must end at header's last line, no 'set -u')
+
+Safety: fm-send stays the only steer transport; the primary injection is the
+shared guarded path with a distinct operational-input kind so the receiving
+session can tell it from a captain message and from an away escalation
+(AGENTS.md section 8 owns how it is handled). Away mode is never exited by
+this script. The scheduler entry never uses shell `&`.
+
+== --help line count vs header comment lines
+help lines: 93
+header comment lines 2..N before 'set -u': 93
+
+== --help scheduler paragraph (crontab minimal PATH / systemd whole PATH / reason reporting)
+install so two installs leave exactly one entry. `install` always prints
+which scheduler it armed; when it fell back to crontab it also prints WHY
+the systemd user timer was skipped (systemctl absent, no user bus under
+XDG_RUNTIME_DIR or /run/user/<uid>, or a user manager in another state),
+with the one-line fix `loginctl enable-linger <user>` when the bus is
+missing and lingering is off. `status` repeats that reason while the
+crontab entry is the arming, or says the timer became usable so install can
+be re-run to prefer it.
+Both schedulers run `run` with FM_HOME pinned. The systemd unit keeps
+pinning the installing shell's whole PATH (systemd has no line limit); the
+CRONTAB entry instead carries a MINIMAL explicit PATH resolved at install
+time from the directory of this script plus the directory of each tool the
+sweep needs that is on PATH then (tmux, quota-axi, git, node, gh, herdr,
+cmux, zellij), deduplicated, followed by /usr/local/bin:/usr/bin:/bin, so the
+line stays a few hundred bytes however long the host PATH is (a WSL PATH
+carrying every Windows directory used to exceed cron's line limit and left
+the sweep silently unarmed). A crontab that still refuses the entry is
+reported with the entry's byte length and crontab's own reason. `uninstall`
+removes the entry from both schedulers. config/limit-resume containing `off`
+makes `run` a no-op and silences bootstrap-lines, for a home that does not
+want the feature.
+71:with the one-line fix `loginctl enable-linger <user>` when the bus is
+75:Both schedulers run `run` with FM_HOME pinned. The systemd unit keeps
+77:CRONTAB entry instead carries a MINIMAL explicit PATH resolved at install
+84:reported with the entry's byte length and crontab's own reason. `uninstall`

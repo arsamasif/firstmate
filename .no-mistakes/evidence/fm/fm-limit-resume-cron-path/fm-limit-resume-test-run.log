@@ -1,0 +1,30 @@
+ok - fm_composer_claude_usage_limit: the live banner fixture, styled or plain, classifies as parked with its reset phrase
+ok - fm_composer_claude_usage_limit: the banner-free pane, a busy footer, a headline above a busy footer, and prose are not parked
+ok - fm_composer_claude_usage_limit: one session's banner text is parked while it sits at the pane tail and not once ordinary work has scrolled it away
+ok - fm_limit_park_parse_reset: zoned and local phrases resolve to the next such wall clock; garbage is refused
+ok - fm_limit_park_observe: writes the record with the later of banner and quota-axi, keeps the episode on refresh, clears when the banner is gone
+ok - fm_limit_park_observe: a later quota-axi reset wins over the banner and the note says which was trusted
+ok - fm_limit_park_observe: a park opens only when the window the banner names corroborates it, and refusing poisons nothing
+ok - fm_limit_park_observe: a hint-only banner is corroborated against both windows, while a headline is judged on the window it names
+ok - fm-crew-state: a parked Claude pane reports paused with the park detail; the same pane without the banner does not
+ok - fm-watch: an active park record is a declared wait (paused class) for the watcher; without it nothing is declared
+ok - fm-supervise-daemon: classify_stale routes a park record as a declared pause and a bare stale as before
+ok - fm-limit-resume run: a reset in the past with a healthy window sends exactly one steer through fm-send, and a second sweep sends none
+ok - fm-limit-resume run: a reset in the future, an exhausted window, and the off switch all send nothing
+ok - fm-limit-resume run: a weekly park observed mid-sweep never decides another task's five-hour resume
+ok - fm-limit-resume run: a same-banner refresh after a passed reset re-reads quota-axi, advances the episode when the live reset moved, and steers once more when that reset has really passed
+ok - fm-limit-resume run: a weekly park is recorded as a declared wait that says it is not resumed, is never steered, and the five-hour banner in the same home still is
+ok - fm-limit-resume run: a record with no reconciled reset waits on an exhausted live window and resumes on a healthy one without waiting for the next window's end
+ok - fm-limit-resume run: idle Claude tasks and non-Claude tasks are left alone
+ok - fm-limit-resume run: a parked, recorded primary receives exactly one guarded usage-window-reset input after the reset, plus one durable wake
+ok - fm-limit-resume run: the composer guard defers the primary input while the composer holds text, and retries next sweep
+ok - fm-limit-resume: an unreachable primary still gets its crews resumed, a durable wake, and the plain-language bootstrap line
+ok - fm-limit-resume: bootstrap-lines leaves a home with no state directory untouched, while run refuses it
+ok - fm-limit-resume install --scheduler cron: two installs leave one tagged entry, foreign lines and a sibling home's entry survive, uninstall is idempotent
+ok - fm-limit-resume install --scheduler cron: an 8 KB host PATH leaves a 465-byte entry, re-install replaces it, uninstall removes it (control: the old shape is 12360 bytes and refused)
+ok - fm-limit-resume install: without a user bus it arms crontab and names the reason plus the linger fix, status repeats it, and a returned bus is preferred again
+ok - fm-limit-resume install: the 'requested by' source is the env var only when no --scheduler flag overrode it
+ok - fm-limit-resume install --scheduler cron: a refused entry is reported with its byte length and cron's reason, never as armed
+ok - fm-limit-resume install --scheduler systemd: two installs leave one timer, and uninstall removes it
+ok - fm-guard: a stale beacon inside a recorded park window reads as parked on the usage limit; an expired record alarms as before
+ok - fm-operational-input: usage-window-reset is a registered kind distinct from a captain message and an away escalation
