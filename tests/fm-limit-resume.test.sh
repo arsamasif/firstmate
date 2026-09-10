@@ -197,6 +197,9 @@ if [ -n "${FM_FAKE_QUOTA_WEEKLY_PCT:-}" ]; then
 fi
 exit 0
 SH
+  # The fake crontab keeps cron's real line limit: cronie refuses any line
+  # longer than 1000 bytes with exactly this wording (measured 2026-09-10 on
+  # WSL when the installing shell's whole PATH was inlined).
   cat > "$fb/crontab" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -204,7 +207,17 @@ f=${FM_FAKE_CRONTAB_FILE:?}
 case "${1:-}" in
   -l) [ -s "$f" ] || exit 1; cat "$f" ;;
   -r) : > "$f" ;;
-  -) cat > "$f" ;;
+  -)
+    new=$(cat)
+    n=0
+    while IFS= read -r l; do
+      n=$((n + 1))
+      if [ "${#l}" -gt 1000 ]; then
+        printf '"-":%s: command too long\nerrors in crontab file, can'"'"'t install.\n' "$n" >&2
+        exit 1
+      fi
+    done <<< "$new"
+    printf '%s\n' "$new" > "$f" ;;
 esac
 exit 0
 SH
@@ -215,7 +228,11 @@ log=${FM_FAKE_SYSTEMCTL_LOG:?}
 printf '%s\n' "$*" >> "$log"
 unit=${!#}
 case "$*" in
-  *is-system-running*) printf 'running\n'; exit 0 ;;
+  *is-system-running*)
+    if [ "${FM_FAKE_SYSTEMCTL_NO_BUS:-0}" = 1 ]; then
+      printf 'Failed to connect to bus: No medium found\n' >&2; exit 1
+    fi
+    printf 'running\n'; exit 0 ;;
   *is-enabled*)
     if grep -qF "enable --now $unit" "$log" 2>/dev/null && ! grep -qF "disable --now $unit" "$log"; then
       printf 'enabled\n'; exit 0
@@ -224,11 +241,16 @@ case "$*" in
 esac
 exit 0
 SH
+  cat > "$fb/loginctl" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${FM_FAKE_LINGER:-no}"
+exit 0
+SH
   cat > "$fb/sleep" <<'SH'
 #!/usr/bin/env bash
 exit 0
 SH
-  chmod +x "$fb/tmux" "$fb/quota-axi" "$fb/crontab" "$fb/systemctl" "$fb/sleep"
+  chmod +x "$fb/tmux" "$fb/quota-axi" "$fb/crontab" "$fb/systemctl" "$fb/loginctl" "$fb/sleep"
   fm_write_meta "$home/state/t1.meta" "window=sess:fm-t1" "kind=ship" "harness=claude" "worktree=$home/wt-t1"
   mkdir -p "$home/wt-t1"
   printf '%s\n' "$PARKED_PANE" > "$dir/parked.txt"
@@ -840,6 +862,90 @@ test_install_cron_is_idempotent() {
   pass "fm-limit-resume install --scheduler cron: two installs leave one tagged entry, foreign lines and a sibling home's entry survive, uninstall is idempotent"
 }
 
+# The crontab entry must stay short however long the host PATH is: the
+# 2026-09-10 WSL defect inlined an 8 KB PATH and cron refused the line, so
+# the standing rule "work resumes by itself" was silently unarmed.
+CRON_LINE_BOUND=600
+pathological_path() {  # -> a PATH over 8 KB of plausible directories
+  local p=$PATH i
+  for i in $(seq 1 120); do
+    p="$p:/mnt/c/Program Files/Vendor Number $i/Some Product/bin"
+  done
+  printf '%s' "$p"
+}
+
+test_install_cron_stays_short_under_pathological_path() {
+  local home dir big line n out old
+  home=$(make_home install-cron-path); dir=$(dirname "$home")
+  big=$(pathological_path)
+  [ "${#big}" -gt 8192 ] || fail "the pathological PATH is only ${#big} bytes"
+  # Positive control: the pre-fix shape (whole PATH inlined) breaks the bound
+  # and cron's limit, so a regression to it cannot pass silently.
+  old="*/5 * * * * PATH=$big FM_HOME=$home $RESUME run >/dev/null 2>&1 # firstmate-limit-resume home=$home"
+  [ "${#old}" -gt "$CRON_LINE_BOUND" ] || fail "positive control: the old entry shape is only ${#old} bytes"
+  [ "${#old}" -gt 1000 ] || fail "positive control: the old entry shape does not exceed cron's limit"
+  out=$(printf '%s\n' "$old" | FM_FAKE_CRONTAB_FILE="$dir/control.txt" "$dir/fakebin/crontab" - 2>&1) && fail "positive control: the fake crontab accepted a ${#old}-byte line"
+  case "$out" in *"command too long"*) ;; *) fail "positive control: the fake crontab did not refuse with cron's wording: $out" ;; esac
+  out=$(PATH="$big" run_resume "$home" install --scheduler cron 2>&1) || fail "install under an 8 KB PATH failed: $out"
+  line=$(grep 'firstmate-limit-resume home=' "$dir/crontab.txt")
+  n=$(printf '%s\n' "$line" | wc -l | tr -d ' ')
+  [ "$n" = 1 ] || fail "install left $n entries"
+  [ "${#line}" -le "$CRON_LINE_BOUND" ] || fail "the crontab entry is ${#line} bytes, over the $CRON_LINE_BOUND-byte bound: $line"
+  case "$line" in *"Program Files"*) fail "the crontab entry inlined the host PATH: $line" ;; esac
+  case "$line" in *"PATH="*"$dir/fakebin"*) ;; *) fail "the crontab entry does not put the sweep's tool directory on PATH: $line" ;; esac
+  case "$line" in *"$ROOT/bin"*"fm-limit-resume.sh run"*) ;; *) fail "the crontab entry does not name the script directory and run the sweep: $line" ;; esac
+  case "$line" in *"*/5 * * * * "*) ;; *) fail "the crontab entry does not fire every 5 minutes: $line" ;; esac
+  case "$out" in *"scheduler: crontab (requested by --scheduler)"*) ;; *) fail "install did not name the scheduler it armed: $out" ;; esac
+  # Re-install under a different PATH replaces the one tagged line.
+  PATH="$big:$dir/elsewhere" run_resume "$home" install --scheduler cron >/dev/null || fail "re-install failed"
+  n=$(grep -c 'firstmate-limit-resume home=' "$dir/crontab.txt")
+  [ "$n" = 1 ] || fail "re-install left $n entries instead of replacing the tagged line"
+  run_resume "$home" uninstall >/dev/null || fail "uninstall failed"
+  ! grep -q 'firstmate-limit-resume' "$dir/crontab.txt" || fail "uninstall left the entry"
+  pass "fm-limit-resume install --scheduler cron: an 8 KB host PATH leaves a ${#line}-byte entry, re-install replaces it, uninstall removes it (control: the old shape is ${#old} bytes and refused)"
+}
+
+test_install_names_why_systemd_was_skipped() {
+  local home dir out
+  home=$(make_home install-no-bus); dir=$(dirname "$home")
+  out=$(FM_FAKE_SYSTEMCTL_NO_BUS=1 XDG_RUNTIME_DIR="$dir/no-runtime" run_resume "$home" install 2>&1) || fail "install without a user bus failed: $out"
+  case "$out" in *"armed: crontab entry"*) ;; *) fail "install did not fall back to crontab: $out" ;; esac
+  case "$out" in *"systemd user timer skipped: no user systemd bus under $dir/no-runtime"*) ;; *) fail "install did not say why systemd was skipped: $out" ;; esac
+  case "$out" in *"lingering is off"*"loginctl enable-linger $(id -un)"*) ;; *) fail "install did not give the linger fix: $out" ;; esac
+  grep -q 'firstmate-limit-resume home=' "$dir/crontab.txt" || fail "no crontab entry was written"
+  out=$(FM_FAKE_SYSTEMCTL_NO_BUS=1 XDG_RUNTIME_DIR="$dir/no-runtime" run_resume "$home" status)
+  case "$out" in *"armed (crontab entry)"*"systemd user timer skipped: no user systemd bus"*"loginctl enable-linger"*) ;; *) fail "status does not report the scheduler and the skip reason: $out" ;; esac
+  # Lingering on, bus still missing: the fix is a fresh login, not enable-linger.
+  out=$(FM_FAKE_SYSTEMCTL_NO_BUS=1 FM_FAKE_LINGER=yes XDG_RUNTIME_DIR="$dir/no-runtime" run_resume "$home" status)
+  case "$out" in *"lingering is on"*) ;; *) fail "status with lingering on still tells the captain to enable it: $out" ;; esac
+  case "$out" in *"enable-linger"*) fail "status with lingering on still tells the captain to enable it: $out" ;; esac
+  # The bus is back: status points at re-running install, and install prefers the timer.
+  out=$(run_resume "$home" status)
+  case "$out" in *"usable now"*"re-run bin/fm-limit-resume.sh install"*) ;; *) fail "status does not notice the timer became usable: $out" ;; esac
+  out=$(run_resume "$home" install 2>&1) || fail "install with a user bus failed: $out"
+  case "$out" in *"armed: systemd user timer"*"scheduler: systemd user timer (preferred)"*) ;; *) fail "install with a user bus did not prefer the timer: $out" ;; esac
+  ! grep -q 'firstmate-limit-resume' "$dir/crontab.txt" || fail "preferring the timer left the crontab entry"
+  # Negative control: a systemctl that is present but in another state names that state.
+  out=$(FM_FAKE_SYSTEMCTL_NO_BUS=1 XDG_RUNTIME_DIR="$dir/xdg" run_resume "$home" install --scheduler systemd 2>&1) && fail "install --scheduler systemd succeeded without a running manager"
+  case "$out" in *"not usable"*) ;; *) fail "the explicit systemd refusal does not explain itself: $out" ;; esac
+  run_resume "$home" uninstall >/dev/null || fail "uninstall failed"
+  pass "fm-limit-resume install: without a user bus it arms crontab and names the reason plus the linger fix, status repeats it, and a returned bus is preferred again"
+}
+
+test_install_cron_reports_length_when_crontab_refuses() {
+  local home dir out seg deep
+  seg=$(printf 'x%.0s' $(seq 1 200))
+  deep="$TMP_ROOT/install-long/$seg/$seg/$seg/$seg/$seg/home"
+  home=$(make_home install-long); dir=$(dirname "$home")
+  mkdir -p "$deep/state" "$deep/config" "$deep/data"
+  out=$(FM_FAKE_CRONTAB_FILE="$dir/crontab.txt" env PATH="$dir/fakebin:$PATH" FM_ROOT_OVERRIDE="$deep" FM_HOME="$deep" \
+    FM_FAKE_CRONTAB_FILE="$dir/crontab.txt" FM_FAKE_SYSTEMCTL_LOG="$dir/systemctl.log" XDG_CONFIG_HOME="$dir/xdg" \
+    "$RESUME" install --scheduler cron 2>&1) && fail "install with a home path past cron's limit succeeded: $out"
+  case "$out" in *"crontab refused the sweep entry ("*" bytes"*"command too long"*) ;; *) fail "the refusal does not report the entry length and cron's reason: $out" ;; esac
+  case "$out" in *"armed:"*) fail "a refused install still claimed to be armed: $out" ;; esac
+  pass "fm-limit-resume install --scheduler cron: a refused entry is reported with its byte length and cron's reason, never as armed"
+}
+
 test_install_systemd_is_idempotent() {
   local home dir unit n out
   home=$(make_home install-systemd); dir=$(dirname "$home")
@@ -914,6 +1020,9 @@ test_run_defers_primary_injection_while_composer_holds_text
 test_unrecorded_primary_gets_durable_wake_and_bootstrap_line
 test_bootstrap_lines_leaves_a_stateless_home_untouched
 test_install_cron_is_idempotent
+test_install_cron_stays_short_under_pathological_path
+test_install_names_why_systemd_was_skipped
+test_install_cron_reports_length_when_crontab_refuses
 test_install_systemd_is_idempotent
 test_guard_describes_park_instead_of_lapsed_watcher
 test_usage_window_reset_kind_is_registered_and_distinct
