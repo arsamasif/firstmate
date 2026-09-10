@@ -64,7 +64,8 @@
 #
 # Record: state/<id>.limit-park - written by fm_limit_park_observe (the
 # watcher's per-poll capture and bin/fm-limit-resume.sh's tokenless sweep both
-# call it) and removed by the same function once the banner is gone, or by
+# call it), or by fm_limit_park_open_stale under the stale-banner rule above,
+# and removed by fm_limit_park_observe once the banner is gone, or by
 # teardown. One `key=value` line per field, private (mode 0600):
 #   v1
 #   episode=<epoch>          identity of this park episode: the reconciled reset
