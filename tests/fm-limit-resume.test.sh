@@ -699,8 +699,9 @@ test_stale_banner_with_no_record_is_resumed_once_after_its_reset_passed() {
   home=$(make_home run-stale-banner); dir=$(dirname "$home")
   # The incident of 2026-09-10: the worker parked with no watcher alive, its
   # banner names a reset six hours ago, the window has long since reset, and
-  # no record exists for it.
+  # no record exists for it. The watcher beacon is stale, as in the incident.
   banner_pane session -21600 > "$dir/stale.txt"
+  touch -d "@$(( $(date +%s) - 7200 ))" "$home/state/.last-watcher-beat"
   FM_FAKE_QUOTA_PCT=98 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 17000) FM_FAKE_PANE_FILE="$dir/stale.txt" \
     run_resume "$home" run || fail "run failed"
   n=$(inbox_records "$home" t1)
@@ -716,14 +717,15 @@ test_stale_banner_with_no_record_is_resumed_once_after_its_reset_passed() {
   grep -q 'no-mistakes axi status' "$home/state/t1.inbox"/*.msg || fail "the stale-banner steer is not the standard resume text"
   grep -q 'resumed t1 from a stale banner (no record; reset .* passed, window healthy)' "$home/state/.limit-resume.log" \
     || fail "log does not record the stale-banner resume"
-  # The outage ended when that reset passed: no outage record whose from would
-  # lie after its until, even behind the stale beacon this home has.
-  assert_absent "$home/state/.limit-park-outage" "a stale-banner park wrote an already-over outage record"
   # Idempotent: a second sweep on the same pane sends nothing.
   FM_FAKE_QUOTA_PCT=98 FM_FAKE_QUOTA_RESETS_AT=$(iso_epoch 17000) FM_FAKE_PANE_FILE="$dir/stale.txt" \
     FM_LIMIT_RESUME_MIN_GAP_SECS=0 run_resume "$home" run || fail "second run failed"
   n=$(inbox_records "$home" t1)
   [ "$n" = 1 ] || fail "a second sweep on the same stale banner sent another steer (found $n)"
+  # The outage ended when that reset passed: neither the opening sweep nor the
+  # refresh behind the stale beacon writes an outage record whose from would
+  # lie after its until.
+  assert_absent "$home/state/.limit-park-outage" "a stale-banner park wrote an already-over outage record"
   pass "fm-limit-resume run: a five-hour banner with no record, a passed reset, and a healthy window is resumed exactly once, and a second sweep sends nothing"
 }
 

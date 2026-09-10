@@ -57,8 +57,8 @@
 # not passed, a hint-only or weekly banner, an exhausted or unreadable window,
 # and a task that already has a record all keep the behaviour above, and the
 # marker keeps a second sweep on the same pane silent. A stale-banner park
-# writes no outage record: that outage ended when its reset passed, and the
-# record owner's outage contract runs from the first sighting to the reset.
+# leaves no outage record on any sweep: its first sighting lies after its
+# reset, and the record owner's already-over rule writes nothing for that.
 # Then it looks at the primary itself through the pane recorded by
 # `record-primary`:
 #   - primary pane reachable and showing the banner: the park is recorded under
@@ -280,7 +280,7 @@ resume_crews() {
       stale=1
     fi
     PARKED=$((PARKED + 1))
-    if [ "$stale" -eq 0 ] && [ "$(beacon_age)" -gt "$GRACE" ]; then
+    if [ "$(beacon_age)" -gt "$GRACE" ]; then
       fm_limit_park_outage_write "$STATE" "$FM_LIMIT_PARK_OBSERVED_AT" "$FM_LIMIT_PARK_RESETS_AT" "crew:$id" || true
     fi
     window_ready "$id" || continue

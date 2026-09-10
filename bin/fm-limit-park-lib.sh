@@ -123,6 +123,11 @@
 # ignored once `until` plus FM_LIMIT_OUTAGE_GRACE_SECS has passed, so a genuine
 # lapse after the reset alarms exactly as before:
 #   from=<epoch> until=<epoch|> observed_at=<epoch> source=<primary|crew:<id>>
+# Already-over rule: a park whose first sighting lies AFTER its reconciled
+# reset (a stale-banner park, its later refreshes, or a park first seen once
+# quota-axi's lagging reset had passed) names an outage that has ended, so
+# fm_limit_park_outage_write writes nothing for it rather than a record whose
+# `from` lies after its `until`; the guard never describes such a park.
 #
 # Primary pane record: state/.primary-pane - written by locked session start
 # through bin/fm-limit-resume.sh record-primary using the ONE supervisor-pane
@@ -712,8 +717,14 @@ fm_limit_park_outage_read() {  # <state>
 # fm_limit_park_outage_write <state> <from> <until|> <source>
 # Create-or-extend: an existing record keeps its earlier `from` and takes the
 # later `until`, so one long park is one outage, not a fresh one per sweep.
+# A sighting whose `from` already lies after its `until` is an outage that is
+# over (the header's already-over rule): 0 with nothing written.
 fm_limit_park_outage_write() {  # <state> <from> <until|> <source>
   local state=$1 from=$2 until=${3-} source=$4 path tmp
+  case "$until" in
+    ''|*[!0-9]*) ;;
+    *) case "$from" in ''|*[!0-9]*) ;; *) [ "$from" -le "$until" ] || return 0 ;; esac ;;
+  esac
   path=$(fm_limit_park_outage_path "$state")
   if fm_limit_park_outage_read "$state"; then
     [ -n "$FM_LIMIT_OUTAGE_FROM" ] && [ "$FM_LIMIT_OUTAGE_FROM" -lt "$from" ] && from=$FM_LIMIT_OUTAGE_FROM
