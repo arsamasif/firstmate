@@ -65,11 +65,27 @@
 # else a running `systemctl --user` (systemd user timer, survives logouts with
 # lingering enabled), else the user crontab. One entry per home, tagged by
 # bin/fm-backend-hometag-lib.sh's home tag, rewritten in place on every
-# install so two installs leave exactly one entry. The scheduler runs `run`
-# with FM_HOME and the installing shell's PATH pinned, because a scheduler's
-# own PATH rarely reaches quota-axi or tmux. `uninstall` removes the entry from
-# both schedulers. config/limit-resume containing `off` makes `run` a no-op
-# and silences bootstrap-lines, for a home that does not want the feature.
+# install so two installs leave exactly one entry. `install` always prints
+# which scheduler it armed; when it fell back to crontab it also prints WHY
+# the systemd user timer was skipped (systemctl absent, no user bus under
+# XDG_RUNTIME_DIR or /run/user/<uid>, or a user manager in another state),
+# with the one-line fix `loginctl enable-linger <user>` when the bus is
+# missing and lingering is off. `status` repeats that reason while the
+# crontab entry is the arming, or says the timer became usable so install can
+# be re-run to prefer it.
+# Both schedulers run `run` with FM_HOME pinned. The systemd unit keeps
+# pinning the installing shell's whole PATH (systemd has no line limit); the
+# CRONTAB entry instead carries a MINIMAL explicit PATH resolved at install
+# time from the directory of this script plus the directory of each tool the
+# sweep needs that is on PATH then (tmux, quota-axi, git, node, gh, herdr,
+# cmux, zellij), deduplicated, followed by /usr/local/bin:/usr/bin:/bin, so the
+# line stays a few hundred bytes however long the host PATH is (a WSL PATH
+# carrying every Windows directory used to exceed cron's line limit and left
+# the sweep silently unarmed). A crontab that still refuses the entry is
+# reported with the entry's byte length and crontab's own reason. `uninstall`
+# removes the entry from both schedulers. config/limit-resume containing `off`
+# makes `run` a no-op and silences bootstrap-lines, for a home that does not
+# want the feature.
 #
 # Safety: fm-send stays the only steer transport; the primary injection is the
 # shared guarded path with a distinct operational-input kind so the receiving
@@ -110,7 +126,7 @@ MIN_PCT=$FM_LIMIT_RESUME_MIN_PCT
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 
 usage() {
-  sed -n '2,78p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,94p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 }
 
 log() {
@@ -384,11 +400,52 @@ run_cmd() {
   printf 'FM_HOME=%q %q run' "$FM_HOME" "$SCRIPT_DIR/fm-limit-resume.sh"
 }
 
+# The directories the scheduled sweep needs on PATH, resolved now from where
+# each tool actually lives (the header owns the contract).
+CRON_PATH_TOOLS="tmux quota-axi git node gh herdr cmux zellij"
+cron_path() {
+  local tool resolved dir out=$SCRIPT_DIR
+  for tool in $CRON_PATH_TOOLS /usr/local/bin/. /usr/bin/. /bin/.; do
+    case "$tool" in
+      /*) dir=${tool%/.} ;;
+      *)
+        resolved=$(command -v "$tool" 2>/dev/null) || continue
+        dir=$(dirname "$resolved")
+        ;;
+    esac
+    case ":$out:" in *":$dir:"*) ;; *) out="$out:$dir" ;; esac
+  done
+  printf '%s' "$out"
+}
+
+# systemd_available: 0 when `systemctl --user` reaches a running user manager;
+# otherwise 1 with SYSTEMD_REASON naming why, in the words install and status
+# print.
+SYSTEMD_REASON=
 systemd_available() {
-  command -v systemctl >/dev/null 2>&1 || return 1
-  case "$(systemctl --user is-system-running 2>/dev/null)" in
+  local state rundir user linger
+  SYSTEMD_REASON=
+  if ! command -v systemctl >/dev/null 2>&1; then
+    SYSTEMD_REASON="systemctl is not installed"
+    return 1
+  fi
+  state=$(systemctl --user is-system-running 2>/dev/null) || true
+  case "$state" in
     running|degraded) return 0 ;;
   esac
+  rundir=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+  if [ ! -S "$rundir/bus" ] && [ ! -d "$rundir/systemd" ]; then
+    user=$(id -un)
+    linger=$(loginctl show-user "$user" -p Linger --value 2>/dev/null | tr -d '[:space:]') || linger=
+    SYSTEMD_REASON="no user systemd bus under $rundir (this shell was not started through a login that runs a user manager"
+    case "$linger" in
+      no) SYSTEMD_REASON="$SYSTEMD_REASON, and lingering is off; fix: loginctl enable-linger $user, then log in again)" ;;
+      yes) SYSTEMD_REASON="$SYSTEMD_REASON; lingering is on, so log in again to start it)" ;;
+      *) SYSTEMD_REASON="$SYSTEMD_REASON; if the host runs systemd, fix: loginctl enable-linger $user, then log in again)" ;;
+    esac
+  else
+    SYSTEMD_REASON="systemctl --user reports '${state:-unreachable}' instead of running"
+  fi
   return 1
 }
 
@@ -449,16 +506,19 @@ uninstall_systemd() {
 }
 
 install_cron() {
-  local existing tag line
+  local existing tag line err
   command -v crontab >/dev/null 2>&1 || { echo "error: crontab is not available" >&2; return 1; }
   tag=$(cron_tag)
   existing=$(crontab -l 2>/dev/null | cron_other_lines "$tag" || true)
-  line="*/5 * * * * PATH=$PATH $(run_cmd) >/dev/null 2>&1 $tag"
+  line="*/5 * * * * $(printf 'PATH=%q' "$(cron_path)") $(run_cmd) >/dev/null 2>&1 $tag"
   if [ -n "$existing" ]; then
-    printf '%s\n%s\n' "$existing" "$line" | crontab - || return 1
+    err=$(printf '%s\n%s\n' "$existing" "$line" | crontab - 2>&1)
   else
-    printf '%s\n' "$line" | crontab - || return 1
-  fi
+    err=$(printf '%s\n' "$line" | crontab - 2>&1)
+  fi || {
+    echo "error: crontab refused the sweep entry (${#line} bytes; cron refuses a line longer than about 1000 bytes, and the entry carries only this script's directory, the sweep's tool directories, and the home path): ${err:-crontab gave no reason}" >&2
+    return 1
+  }
   printf 'armed: crontab entry (every 5 minutes)\n'
 }
 
@@ -477,31 +537,39 @@ uninstall_cron() {
 }
 
 cmd_install() {
-  local scheduler=${FM_LIMIT_RESUME_SCHEDULER:-}
+  local scheduler=${FM_LIMIT_RESUME_SCHEDULER:-} source=
+  [ -z "$scheduler" ] || source=FM_LIMIT_RESUME_SCHEDULER
   while [ $# -gt 0 ]; do
     case "$1" in
-      --scheduler) [ $# -ge 2 ] || { usage; exit 2; }; scheduler=$2; shift 2 ;;
-      --scheduler=*) scheduler=${1#--scheduler=}; shift ;;
+      --scheduler) [ $# -ge 2 ] || { usage; exit 2; }; scheduler=$2; source=--scheduler; shift 2 ;;
+      --scheduler=*) scheduler=${1#--scheduler=}; source=--scheduler; shift ;;
       *) usage; exit 2 ;;
     esac
   done
+  local why=
   if [ -z "$scheduler" ]; then
     if systemd_available; then scheduler=systemd
-    elif command -v crontab >/dev/null 2>&1; then scheduler=cron
+    elif command -v crontab >/dev/null 2>&1; then
+      scheduler=cron
+      why="systemd user timer skipped: $SYSTEMD_REASON"
     else
-      echo "error: neither a running systemd user manager nor crontab is available; nothing can schedule the sweep" >&2
+      echo "error: neither a running systemd user manager nor crontab is available ($SYSTEMD_REASON); nothing can schedule the sweep" >&2
       exit 1
     fi
+  else
+    why="requested by $source"
   fi
   case "$scheduler" in
     systemd)
-      systemd_available || { echo "error: systemctl --user is not running; use --scheduler cron" >&2; exit 1; }
+      systemd_available || { echo "error: systemd user timer is not usable ($SYSTEMD_REASON); use --scheduler cron" >&2; exit 1; }
       uninstall_cron >/dev/null || true
       install_systemd || { echo "error: could not arm the systemd user timer" >&2; exit 1; }
+      printf 'scheduler: systemd user timer (%s)\n' "${why:-preferred}"
       ;;
     cron)
       uninstall_systemd >/dev/null || true
       install_cron || exit 1
+      printf 'scheduler: crontab (%s)\n' "$why"
       ;;
     *) echo "error: unknown scheduler '$scheduler' (systemd|cron)" >&2; exit 2 ;;
   esac
@@ -532,6 +600,13 @@ cmd_status() {
     echo "usage-limit resume: off (config/limit-resume)"
   elif how=$(armed_how); then
     echo "usage-limit resume: armed ($how)"
+    if [ "$how" = "crontab entry" ]; then
+      if systemd_available; then
+        echo "scheduler: crontab; the systemd user timer is usable now, so re-run bin/fm-limit-resume.sh install to prefer it"
+      else
+        echo "scheduler: crontab; systemd user timer skipped: $SYSTEMD_REASON"
+      fi
+    fi
   else
     echo "usage-limit resume: not armed (run bin/fm-limit-resume.sh install)"
   fi

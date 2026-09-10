@@ -493,6 +493,7 @@ tests/fm-turnend-guard.test.sh
 ## Usage-limit park and tokenless resume
 
 Recorded 2026-09-05 against the live incident of 2026-09-04, when every Claude worker and the Claude primary parked on the shared five-hour window and nothing resumed for 7.9 hours.
+Re-run 2026-09-10 with the same Claude Code and quota-axi versions after the scheduler install learned to keep the crontab entry short and to name the scheduler it armed.
 The banner fixture is the exact rendered text from that pane; the installed Claude Code when the shape was recorded was 2.1.261 and quota-axi was 0.1.30.
 No credential material was copied into a fixture, and every case runs in a throwaway home with a fake tmux, a fake quota-axi, and fake schedulers.
 
@@ -530,12 +531,16 @@ ok - fm-limit-resume run: the composer guard defers the primary input while the 
 ok - fm-limit-resume: an unreachable primary still gets its crews resumed, a durable wake, and the plain-language bootstrap line
 ok - fm-limit-resume: bootstrap-lines leaves a home with no state directory untouched, while run refuses it
 ok - fm-limit-resume install --scheduler cron: two installs leave one tagged entry, foreign lines and a sibling home's entry survive, uninstall is idempotent
+ok - fm-limit-resume install --scheduler cron: an 8 KB host PATH leaves a 465-byte entry, re-install replaces it, uninstall removes it (control: the old shape is 12360 bytes and refused)
+ok - fm-limit-resume install: without a user bus it arms crontab and names the reason plus the linger fix, status repeats it, and a returned bus is preferred again
+ok - fm-limit-resume install: the 'requested by' source is the env var only when no --scheduler flag overrode it
+ok - fm-limit-resume install --scheduler cron: a refused entry is reported with its byte length and cron's reason, never as armed
 ok - fm-limit-resume install --scheduler systemd: two installs leave one timer, and uninstall removes it
 ok - fm-guard: a stale beacon inside a recorded park window reads as parked on the usage limit; an expired record alarms as before
 ok - fm-operational-input: usage-window-reset is a registered kind distinct from a captain message and an away escalation
 ```
 
-Observed guarantee: the parked pane is a declared external wait with its reset time everywhere the fleet reads one, exactly one resume steer per park episode leaves through `bin/fm-send.sh` after the reset with a healthy window, a same-banner refresh past its reset becomes a new episode only when the live window still reads exhausted with a later reset, a weekly park and a headline above a busy footer are never steered, a recorded primary receives one guarded `usage-window-reset` input, an unrecorded primary receives a durable wake plus the bootstrap line, two scheduler installs leave one entry, and a stale beacon inside a recorded park is described as parked rather than as a lapsed watcher.
+Observed guarantee: the parked pane is a declared external wait with its reset time everywhere the fleet reads one, exactly one resume steer per park episode leaves through `bin/fm-send.sh` after the reset with a healthy window, a same-banner refresh past its reset becomes a new episode only when the live window still reads exhausted with a later reset, a weekly park and a headline above a busy footer are never steered, a recorded primary receives one guarded `usage-window-reset` input, an unrecorded primary receives a durable wake plus the bootstrap line, two scheduler installs leave one entry, a crontab entry stays a few hundred bytes under an 8 KB host PATH while the old inlined-PATH shape exceeds cron's limit, install and status name the scheduler and why the systemd user timer was skipped, a refused crontab entry is reported with its length and never as armed, and a stale beacon inside a recorded park is described as parked rather than as a lapsed watcher.
 The live banner fixture and the same pane without it are the positive and negative controls, so the classifier cannot go vacuous.
 The rendered banner is only a screen signal, and the record owner decides whether a park is real.
 A record opens when the window the banner's headline names still reads spent, when quota-axi cannot be read or carries no row for that window, or - for a hint-only capture, which names no window at all - when either the five-hour or the weekly row still reads spent.
