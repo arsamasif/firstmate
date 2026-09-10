@@ -1,0 +1,12 @@
+Regression check: the two new cases in tests/fm-limit-resume.test.sh run against the base tree
+(0d39b03, extracted with git archive) and against the target head (4d6c536).
+
+base 0d39b03 - test_stale_banner_with_no_record_is_resumed_once_after_its_reset_passed:
+  not ok - a stale banner with no record was not resumed exactly once (found 0)
+base 0d39b03 - test_stale_banner_path_opens_nothing_without_all_three_facts:
+  not ok - the record's reset 1789127220 is not quota-axi's live reset 1789066030
+  (the record waited ~17 h on the phantom next-day occurrence of the banner clock)
+
+target 4d6c536 - tests/fm-limit-resume.test.sh (full file, 32 cases, exit 0):
+  ok - fm-limit-resume run: a five-hour banner with no record, a passed reset, and a healthy window is resumed exactly once, and a second sweep sends nothing
+  ok - fm-limit-resume run: an exhausted window, an unpassed reset, a weekly banner, and a hint-only banner never take the stale-banner path

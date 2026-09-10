@@ -1,0 +1,83 @@
+=== tree: base 0d39b03 (before fix) ===
+now (UTC): 2026-09-10 17:47:49
+
+$ tmux capture-pane -t fm-t1   # the worker's pane: banner names a clock 6 h ago, no park record exists
+  ⏺ Reading the stale path in the watcher.
+
+  You've hit your session limit · resets 11:47am (UTC)
+  /upgrade or /usage-credits to finish what you are working on.
+
+  ─────────────────────────────────────────────────────────────
+
+  ❯
+
+$ ls state/ | grep t1
+t1.meta
+
+$ quota-axi   # live window: 98% remaining, resets in ~4.7 h
+windows[1]{provider,id,label,percentRemaining,resetsAt,pace}:
+  claude,five_hour,session,98,"2026-09-10T22:31:09+00:00",ahead
+
+$ fm-limit-resume.sh run   # sweep 1
+rc=0
+
+$ cat state/.limit-resume.log
+(no log)
+
+$ ls state/ | grep t1
+t1.meta
+
+$ cat state/t1.limit-park
+(no record)
+
+$ cat state/t1.limit-park.resumed
+(no receipt)
+
+$ cat state/t1.inbox/*.msg   # the resume steer delivered to the worker
+(no steer sent)
+
+$ ls state/.limit-park-outage
+(no outage record: the outage was already over)
+
+$ fm-limit-resume.sh run   # sweep 2 on the same pane
+rc=0
+
+$ ls state/t1.inbox/
+(empty)
+steers sent to t1 after two sweeps: 0
+
+$ ls state/.limit-park-outage
+(still no outage record)
+
+=== control: same stale banner, quota-axi still reads exhausted (0%, live reset in 1 h) ===
+
+$ fm-limit-resume.sh run
+rc=0
+
+$ cat state/.limit-resume.log
+2026-09-10T13:47:50-0400 quota-axi five_hour: 0% remaining, resets 14:47 EDT on 2026-09-10
+2026-09-10T13:47:50-0400 t1 still parked until 07:47 EDT on 2026-09-11 (banner)
+2026-09-10T13:47:50-0400 sweep: parked=1 resumed=0 primary=unrecorded
+
+$ cat state/t1.limit-park
+v1
+episode=1789127220
+observed_at=1789062469
+last_seen=1789062469
+window=five_hour
+banner=You've hit your session limit · resets 11:47am (UTC)
+banner_reset=11:47am (UTC)
+banner_resets_at=1789127220
+quota_pct=0
+quota_resets_at=1789066069
+resets_at=1789127220
+reset_source=banner
+rechecked_at=
+note=banner reset 07:47 EDT on 2026-09-11 is later than quota-axi five_hour resetsAt 14:47 EDT on 2026-09-10; trusting the later banner time
+record resets_at = 2026-09-11 11:47 UTC  (source=banner)
+quota-axi live  = 2026-09-10 18:47 UTC
+record waits 1079 min from now
+steers sent to t1: 0
+
+$ ls state/t1.limit-park.resumed
+(no receipt)

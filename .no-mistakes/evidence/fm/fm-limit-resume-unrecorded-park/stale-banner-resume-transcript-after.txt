@@ -1,0 +1,106 @@
+=== tree: target 4d6c536 (with fix) ===
+now (UTC): 2026-09-10 17:47:46
+
+$ tmux capture-pane -t fm-t1   # the worker's pane: banner names a clock 6 h ago, no park record exists
+  ⏺ Reading the stale path in the watcher.
+
+  You've hit your session limit · resets 11:47am (UTC)
+  /upgrade or /usage-credits to finish what you are working on.
+
+  ─────────────────────────────────────────────────────────────
+
+  ❯
+
+$ ls state/ | grep t1
+t1.meta
+
+$ quota-axi   # live window: 98% remaining, resets in ~4.7 h
+windows[1]{provider,id,label,percentRemaining,resetsAt,pace}:
+  claude,five_hour,session,98,"2026-09-10T22:31:06+00:00",ahead
+
+$ fm-limit-resume.sh run   # sweep 1
+rc=0
+
+$ cat state/.limit-resume.log
+2026-09-10T13:47:47-0400 quota-axi five_hour: 98% remaining, resets 18:31 EDT on 2026-09-10
+2026-09-10T13:47:47-0400 t1 shows a stale usage-limit banner with no record: its reset 07:47 EDT on 2026-09-10 passed and the window reads 98%; opened the park for the ordinary resume
+2026-09-10T13:47:47-0400 t1 reset cross-check: stale banner: no record existed when its reset 07:47 EDT on 2026-09-10 passed (no watcher was alive to record the park) and the live window reads healthy; opened for the ordinary resume
+2026-09-10T13:47:48-0400 resumed t1 from a stale banner (no record; reset 07:47 EDT on 2026-09-10 passed, window healthy)
+2026-09-10T13:47:48-0400 sweep: parked=1 resumed=1 primary=unrecorded
+
+$ ls state/ | grep t1
+t1.inbox
+t1.limit-park
+t1.limit-park.resumed
+t1.meta
+
+$ cat state/t1.limit-park
+v1
+episode=1789040820
+observed_at=1789062467
+last_seen=1789062467
+window=five_hour
+banner=You've hit your session limit · resets 11:47am (UTC)
+banner_reset=11:47am (UTC)
+banner_resets_at=1789040820
+quota_pct=
+quota_resets_at=
+resets_at=1789040820
+reset_source=banner
+rechecked_at=
+note=stale banner: no record existed when its reset 07:47 EDT on 2026-09-10 passed (no watcher was alive to record the park) and the live window reads healthy; opened for the ordinary resume
+
+$ cat state/t1.limit-park.resumed
+episode=1789040820 resets_at=1789040820 sent_at=1789062467
+
+$ cat state/t1.inbox/*.msg   # the resume steer delivered to the worker
+schema=fm-task-inbox.v1
+at=2026-09-10T17:47:47Z
+--
+The Claude usage window has reset (automatic resume, no captain present). If a no-mistakes run exists for your branch, read `no-mistakes axi status` FIRST and drive from its current gate or outcome; never restart the run or start a second one while it owns the branch. If no run exists, continue your brief from where you stopped. Append your normal status line when you reach the next gate or outcome.
+$ ls state/.limit-park-outage
+(no outage record: the outage was already over)
+
+$ fm-limit-resume.sh run   # sweep 2 on the same pane
+rc=0
+
+$ ls state/t1.inbox/
+001.msg
+handled
+steers sent to t1 after two sweeps: 1
+
+$ ls state/.limit-park-outage
+(still no outage record)
+
+=== control: same stale banner, quota-axi still reads exhausted (0%, live reset in 1 h) ===
+
+$ fm-limit-resume.sh run
+rc=0
+
+$ cat state/.limit-resume.log
+2026-09-10T13:47:48-0400 quota-axi five_hour: 0% remaining, resets 14:47 EDT on 2026-09-10
+2026-09-10T13:47:48-0400 t1 still parked until 14:47 EDT on 2026-09-10 (quota)
+2026-09-10T13:47:48-0400 sweep: parked=1 resumed=0 primary=unrecorded
+
+$ cat state/t1.limit-park
+v1
+episode=1789066068
+observed_at=1789062468
+last_seen=1789062468
+window=five_hour
+banner=You've hit your session limit · resets 11:47am (UTC)
+banner_reset=11:47am (UTC)
+banner_resets_at=1789040820
+quota_pct=0
+quota_resets_at=1789066068
+resets_at=1789066068
+reset_source=quota
+rechecked_at=
+note=quota-axi five_hour resetsAt 14:47 EDT on 2026-09-10 is later than the banner reset 07:47 EDT on 2026-09-10; trusting the later quota-axi time
+record resets_at = 2026-09-10 18:47 UTC  (source=quota)
+quota-axi live  = 2026-09-10 18:47 UTC
+record waits 60 min from now
+steers sent to t1: 0
+
+$ ls state/t1.limit-park.resumed
+(no receipt)
