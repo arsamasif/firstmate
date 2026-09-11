@@ -43,7 +43,8 @@
 # which one lane's teardown SIGTERMed on 2026-09-10 and so failed two sibling lanes'
 # in-flight pipeline runs:
 #   (z)  daemon-shaped process at the worktree cwd -> SPARED and named (leak beside it still reaped)
-#   (aa) pid recorded in the daemon lock file      -> SPARED with its descendants
+#   (aa) pid recorded in the daemon lock file      -> SPARED (its ordinary child still reaped)
+#   (ab) daemon lock older than the pid it names   -> stale record, spares nothing
 #
 # Also covers backlog teardown-lock-race: a git index.lock left in the worktree by a
 # killed crew process (bin/fm-teardown.sh's teardown_treehouse_return).
@@ -2243,34 +2244,48 @@ test_leaked_worktree_process_is_reaped() {
 # from leaked task work to the cwd scan. Reaping it kills every other lane's
 # in-flight pipeline run, so teardown must spare it - while still reaping the
 # genuine leak beside it, which is what the positive control in each case pins.
-child_pid_of() {  # <pid>
-  LC_ALL=C ps -eo pid=,ppid= 2>/dev/null \
-    | awk -v parent="$1" '$2 == parent { print $1; exit }'
+# FM_PS_SNAPSHOT_OVERRIDE hands teardown a process view built from these cases'
+# own processes, so the outcome does not depend on whether the host running the
+# suite happens to have a real no-mistakes daemon of its own.
+write_ps_snapshot() {  # <file> <pid>...
+  local file=$1 list
+  shift
+  list=$(IFS=,; printf '%s' "$*")
+  LC_ALL=C ps -o pid=,args= -p "$list" > "$file"
 }
 
 assert_alive_then_kill() {  # <pid> <description>
-  local pid=$1 description=$2
+  local pid=$1 description=$2 child
   kill -0 "$pid" 2>/dev/null || fail "$description"
+  for child in $(LC_ALL=C ps -eo pid=,ppid= 2>/dev/null | awk -v p="$pid" '$2 == p { print $1 }'); do
+    kill -KILL "$child" 2>/dev/null || true
+  done
   kill -KILL "$pid" 2>/dev/null || true
 }
 
+assert_reaped() {  # <pid> <description>
+  local pid=$1 description=$2
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+    fail "$description"
+  fi
+}
+
 test_daemon_shaped_process_is_spared_while_leaked_process_is_reaped() {
-  local case_dir rc daemon_pid daemon_child leaked_pid
+  local case_dir rc daemon_pid log_sink_pid leaked_pid
   case_dir=$(make_case daemon-spare-shape)
   write_meta "$case_dir" no-mistakes ship
   land_shippable_commit "$case_dir"
 
-  # A process whose command line has the daemon's own shape, running with the
-  # task worktree as its cwd. Its `sleep` child inherits that cwd, so the
-  # descendant rule is exercised too.
-  mkdir -p "$case_dir/fakedaemon"
-  cat > "$case_dir/fakedaemon/no-mistakes" <<'SH'
-#!/usr/bin/env bash
-sleep 300
-SH
-  chmod +x "$case_dir/fakedaemon/no-mistakes"
-  ( cd "$case_dir/wt" && exec "$case_dir/fakedaemon/no-mistakes" daemon run ) &
+  # Two processes carrying the daemon's own command shape, both running with
+  # the task worktree as their cwd: the daemon itself at argv position 0 (the
+  # real Go binary's shape) and its log sink at position 1 (the interpreted
+  # `bash /path/no-mistakes ...` shape).
+  ( cd "$case_dir/wt" && exec -a "$case_dir/fakebin/no-mistakes daemon run" sleep 300 ) &
   daemon_pid=$!
+  disown
+  ( cd "$case_dir/wt" && exec -a "bash $case_dir/fakebin/no-mistakes daemon log-sink" sleep 300 ) &
+  log_sink_pid=$!
   disown
 
   # Positive control: an ordinary leaked process at the very same cwd.
@@ -2280,23 +2295,22 @@ SH
 
   sleep 0.5
   kill -0 "$daemon_pid" 2>/dev/null || fail "daemon-spare-shape: setup daemon did not start"
+  kill -0 "$log_sink_pid" 2>/dev/null || fail "daemon-spare-shape: setup log sink did not start"
   kill -0 "$leaked_pid" 2>/dev/null || fail "daemon-spare-shape: setup control process did not start"
-  daemon_child=$(child_pid_of "$daemon_pid")
-  [ -n "$daemon_child" ] || fail "daemon-spare-shape: setup daemon spawned no child"
+  write_ps_snapshot "$case_dir/ps-snapshot" "$daemon_pid" "$log_sink_pid" "$leaked_pid"
 
   rc=0
+  FM_PS_SNAPSHOT_OVERRIDE="$case_dir/ps-snapshot" \
   FM_NO_MISTAKES_HOME_OVERRIDE="$case_dir/no-such-no-mistakes-home" \
     run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
 
   expect_code 0 "$rc" "daemon-spare-shape: teardown should still succeed"
   assert_alive_then_kill "$daemon_pid" \
     "daemon-spare-shape: the shared no-mistakes daemon was reaped by teardown"
-  assert_alive_then_kill "$daemon_child" \
-    "daemon-spare-shape: a no-mistakes daemon child was reaped by teardown"
-  if kill -0 "$leaked_pid" 2>/dev/null; then
-    kill -KILL "$leaked_pid" 2>/dev/null || true
-    fail "daemon-spare-shape: the genuinely leaked worktree process survived teardown"
-  fi
+  assert_alive_then_kill "$log_sink_pid" \
+    "daemon-spare-shape: the no-mistakes daemon log sink was reaped by teardown"
+  assert_reaped "$leaked_pid" \
+    "daemon-spare-shape: the genuinely leaked worktree process survived teardown"
   assert_grep "sparing the shared no-mistakes daemon" "$case_dir/stderr" \
     "daemon-spare-shape: teardown did not name what it spared"
   assert_grep "reaping leaked worktree process" "$case_dir/stderr" \
@@ -2312,8 +2326,12 @@ test_recorded_daemon_pid_is_spared_whatever_its_command_shape() {
 
   # No daemon-shaped command line here: the only thing marking this process as
   # the daemon is the pid recorded in the lock file, which is what keeps a
-  # future release's different command shape from being reaped.
-  ( cd "$case_dir/wt" && exec bash -c 'sleep 300; :' ) &
+  # future release's different command shape from being reaped. It holds two
+  # children - one at the worktree cwd, which is ordinary work the reap must
+  # still take, and one outside it that the cwd scan never sees and that keeps
+  # this process alive past the reap.
+  ( cd "$case_dir/wt" && exec bash -c 'sleep 300 & echo $! > "$1"; ( cd / && exec sleep 300 )' \
+    fake-daemon "$case_dir/daemon-child.pid" ) &
   daemon_pid=$!
   disown
   ( cd "$case_dir/wt" && exec sleep 300 ) &
@@ -2321,28 +2339,66 @@ test_recorded_daemon_pid_is_spared_whatever_its_command_shape() {
   disown
 
   sleep 0.5
-  daemon_child=$(child_pid_of "$daemon_pid")
+  kill -0 "$daemon_pid" 2>/dev/null || fail "daemon-spare-lock: setup daemon did not start"
+  daemon_child=$(cat "$case_dir/daemon-child.pid" 2>/dev/null) || daemon_child=
   [ -n "$daemon_child" ] || fail "daemon-spare-lock: setup daemon spawned no child"
+  write_ps_snapshot "$case_dir/ps-snapshot" "$daemon_pid" "$daemon_child" "$leaked_pid"
+
+  # The real-world ordering: the daemon starts, then records its pid. A lock
+  # older than the process it names is a recycled pid, and teardown must not
+  # root its spare set there.
   mkdir -p "$case_dir/nm-home"
   printf '{"pid":%s,"started_at":"2026-09-10T13:37:46Z"}\n' "$daemon_pid" \
     > "$case_dir/nm-home/daemon.lock"
 
   rc=0
+  FM_PS_SNAPSHOT_OVERRIDE="$case_dir/ps-snapshot" \
   FM_NO_MISTAKES_HOME_OVERRIDE="$case_dir/nm-home" \
     run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
 
   expect_code 0 "$rc" "daemon-spare-lock: teardown should still succeed"
   assert_alive_then_kill "$daemon_pid" \
     "daemon-spare-lock: the recorded daemon pid was reaped by teardown"
-  assert_alive_then_kill "$daemon_child" \
-    "daemon-spare-lock: a descendant of the recorded daemon pid was reaped by teardown"
-  if kill -0 "$leaked_pid" 2>/dev/null; then
-    kill -KILL "$leaked_pid" 2>/dev/null || true
-    fail "daemon-spare-lock: the genuinely leaked worktree process survived teardown"
-  fi
+  assert_reaped "$daemon_child" \
+    "daemon-spare-lock: a plain child of the recorded daemon pid survived teardown"
+  assert_reaped "$leaked_pid" \
+    "daemon-spare-lock: the genuinely leaked worktree process survived teardown"
   assert_grep "sparing the shared no-mistakes daemon" "$case_dir/stderr" \
     "daemon-spare-lock: teardown did not name what it spared"
-  pass "teardown spares the pid recorded in the daemon lock file and its descendants, and still reaps the leak beside it"
+  pass "teardown spares the pid recorded in the daemon lock file while still reaping that pid's ordinary child"
+}
+
+test_stale_recorded_daemon_pid_does_not_spare_a_leak() {
+  local case_dir rc leaked_pid
+  case_dir=$(make_case daemon-spare-stale-lock)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+
+  # A daemon SIGKILLed without cleaning its lock leaves the recorded pid free
+  # for the OS to hand to something else. Here the lock predates the process
+  # that now holds that pid, so the record is stale and must not spare it.
+  mkdir -p "$case_dir/nm-home"
+  ( cd "$case_dir/wt" && exec sleep 300 ) &
+  leaked_pid=$!
+  disown
+  sleep 0.5
+  kill -0 "$leaked_pid" 2>/dev/null || fail "daemon-spare-stale-lock: setup control process did not start"
+  write_ps_snapshot "$case_dir/ps-snapshot" "$leaked_pid"
+  printf '{"pid":%s,"started_at":"2026-09-10T13:37:46Z"}\n' "$leaked_pid" \
+    > "$case_dir/nm-home/daemon.lock"
+  touch -t 202609101337 "$case_dir/nm-home/daemon.lock"
+
+  rc=0
+  FM_PS_SNAPSHOT_OVERRIDE="$case_dir/ps-snapshot" \
+  FM_NO_MISTAKES_HOME_OVERRIDE="$case_dir/nm-home" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 0 "$rc" "daemon-spare-stale-lock: teardown should still succeed"
+  assert_reaped "$leaked_pid" \
+    "daemon-spare-stale-lock: a leaked process holding a recycled daemon pid survived teardown"
+  assert_not_contains "$(cat "$case_dir/stderr")" "sparing the shared no-mistakes daemon" \
+    "daemon-spare-stale-lock: teardown named a leaked process as the daemon it spared"
+  pass "a daemon lock older than the process it names is stale and spares nothing"
 }
 
 test_leaked_tasktmp_process_is_reaped() {
@@ -2755,6 +2811,7 @@ test_own_autonomous_run_is_left_alone
 test_leaked_worktree_process_is_reaped
 test_daemon_shaped_process_is_spared_while_leaked_process_is_reaped
 test_recorded_daemon_pid_is_spared_whatever_its_command_shape
+test_stale_recorded_daemon_pid_does_not_spare_a_leak
 test_leaked_tasktmp_process_is_reaped
 test_lsof_absent_reaps_tmux_process_group
 test_lsof_error_refuses_before_removal
