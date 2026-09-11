@@ -189,19 +189,27 @@ Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](f
 
 ### Per-step agent timeout
 
-no-mistakes bounds each pipeline agent invocation by wall clock and fails the run when that budget elapses, leaving the timed-out agent's changes uncommitted in its run worktree.
+no-mistakes bounds each pipeline agent invocation by wall clock and fails the run when that budget elapses, at whatever point the killed round had reached, so some, all, or none of its work may already be committed in its run worktree.
 Three keys carry it, each defaulting to `30m`: `agent_timeout` covers the document, lint, rebase, PR, CI-fix, and auto-fix steps, `review_agent_timeout` covers one whole review round including its review-fix and rereview turns, and `test_agent_timeout` covers the Test step including its evidence turn.
 Thirty minutes is short for a repository whose agent instructions run to thousands of lines, whose largest source file is big, or whose test command takes minutes: a round there is killed while still producing output, which is scale rather than a stalled agent.
 This fleet uses `90m` for all three.
 
-They live in the machine-wide `~/.no-mistakes/config.yaml`, not in the tracked `.no-mistakes.yaml`, so they are applied once per machine and are absent from a config file an older no-mistakes wrote:
+They live in the machine-wide `~/.no-mistakes/config.yaml`, not in the tracked `.no-mistakes.yaml`, so they are applied once per machine, and a config an older no-mistakes wrote lacks them entirely while one no-mistakes generated itself already carries all three at `30m`:
 
 ```sh
-grep -q '^agent_timeout:' ~/.no-mistakes/config.yaml || printf 'agent_timeout: "90m"\nreview_agent_timeout: "90m"\ntest_agent_timeout: "90m"\n' >> ~/.no-mistakes/config.yaml
+for k in agent_timeout review_agent_timeout test_agent_timeout; do
+  if grep -q "^$k:" ~/.no-mistakes/config.yaml; then
+    sed -i "s|^$k:.*|$k: \"90m\"|" ~/.no-mistakes/config.yaml
+  else
+    printf '%s: "90m"\n' "$k" >> ~/.no-mistakes/config.yaml
+  fi
+done
 ```
 
+The loop sets each key to `90m` whether or not it was already present, rewriting a present key in place and appending only a missing one, so pasting it twice changes nothing further and never produces a duplicate key.
 Apply it between runs and never restart the shared daemon to force it, because one daemon serves every lane and a restart kills every in-flight run.
-A no-mistakes old enough not to know a key can reject the whole file, so confirm the installed binary carries it before appending: `strings $(command -v no-mistakes) | grep -c '^agent_timeout: '` returns a non-zero count when its own generated config template documents the key.
+The value governs runs started after it is applied, and if rounds still stop at the old budget it takes effect no later than the daemon's next restart, which is firstmate's call for that same reason.
+A no-mistakes old enough not to know a key can reject the whole file, so confirm the installed binary carries it before applying the loop: `strings $(command -v no-mistakes) | grep -c '^agent_timeout: '` returns a non-zero count when its own generated config template documents the key.
 Until it is applied, the round-bounding rule in the generated no-mistakes brief (`bin/fm-brief.sh`) is what keeps a round inside the default budget, and [`stuck-crewmate-recovery`](../.agents/skills/stuck-crewmate-recovery/SKILL.md) owns recovering a round the timeout killed.
 
 ## Captain Preferences (data/captain.md / data/captain-shared.md)

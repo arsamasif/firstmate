@@ -56,7 +56,7 @@ Escalate in order:
 
 ## A validation round the agent timeout killed
 
-A pipeline round that outlives no-mistakes' wall-clock agent timeout fails the run and leaves that agent's changes uncommitted in its run worktree, so the work is neither lost nor landed; [`configuration.md`](../../../docs/configuration.md) owns the timeout keys and this fleet's value, and the generated no-mistakes brief already tells each round to make its change and stop.
-Recover it by content, never by trusting the killed round's own summary of what it did.
+A pipeline round that outlives no-mistakes' wall-clock agent timeout fails the run at whatever point it had reached, so some, all, or none of that round's work may already be committed in its run worktree; [`configuration.md`](../../../docs/configuration.md) owns the timeout keys and this fleet's value, and the generated no-mistakes brief already tells each round to make its change and stop.
+Treat nothing as lost and nothing as landed by assumption, and recover it by content, never by trusting the killed round's own summary of what it did.
 Have the worker settle branch ownership first, using axi sync's guarded recovery only when structured status asks for it, then compare the run worktree against the branch head and account for every difference by what that difference contains.
-Re-run the project's suites over the reconciled tree yourself before starting a fresh run, because the killed round never reached the step that would have run them.
+Require the worker to re-run the project's suites over the reconciled tree before starting a fresh run, because the killed round never reached the step that would have run them.
