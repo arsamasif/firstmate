@@ -192,7 +192,7 @@ Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](f
 no-mistakes bounds each pipeline agent invocation by wall clock and fails the run when that budget elapses, at whatever point the killed round had reached, so some, all, or none of its work may already be committed in its run worktree.
 Three keys carry it, each defaulting to `30m`: `agent_timeout` covers the document, lint, rebase, PR, CI-fix, and auto-fix steps, `review_agent_timeout` covers one whole review round including its review-fix and rereview turns, and `test_agent_timeout` covers the Test step including its evidence turn.
 Thirty minutes is short for a repository whose agent instructions run to thousands of lines, whose largest source file is big, or whose test command takes minutes: a round there is killed while still producing output, which is scale rather than a stalled agent.
-This fleet uses `90m` for all three.
+This fleet's value is `90m` for all three, and the last paragraph of this section owns whether it is in force yet.
 A no-mistakes old enough not to know a key can reject the whole file, so confirm the binary the daemon runs carries every key the command writes before applying it: `strings ~/.no-mistakes/bin/no-mistakes | grep -Ec '^(agent_timeout|review_agent_timeout|test_agent_timeout): '` counts them in its own generated config template, and all three must be present.
 Check that path rather than whatever `command -v no-mistakes` resolves to, because the daemon runs its own binary and the two are not necessarily the same build.
 
