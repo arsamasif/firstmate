@@ -187,6 +187,23 @@ It does not set `commands.test` to a complete `tests/*.test.sh` walk.
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the firstmate-specific local test policy and entry points.
 Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](fm-test-portable-shards.md); [herdr-backend.md](herdr-backend.md#destructive-lab-safety) owns the real-Herdr lane's isolation boundary, and [runtime-backends.md](verification/runtime-backends.md#herdr) owns active evidence.
 
+### Per-step agent timeout
+
+no-mistakes bounds each pipeline agent invocation by wall clock and fails the run when that budget elapses, leaving the timed-out agent's changes uncommitted in its run worktree.
+Three keys carry it, each defaulting to `30m`: `agent_timeout` covers the document, lint, rebase, PR, CI-fix, and auto-fix steps, `review_agent_timeout` covers one whole review round including its review-fix and rereview turns, and `test_agent_timeout` covers the Test step including its evidence turn.
+Thirty minutes is short for a repository whose agent instructions run to thousands of lines, whose largest source file is big, or whose test command takes minutes: a round there is killed while still producing output, which is scale rather than a stalled agent.
+This fleet uses `90m` for all three.
+
+They live in the machine-wide `~/.no-mistakes/config.yaml`, not in the tracked `.no-mistakes.yaml`, so they are applied once per machine and are absent from a config file an older no-mistakes wrote:
+
+```sh
+grep -q '^agent_timeout:' ~/.no-mistakes/config.yaml || printf 'agent_timeout: "90m"\nreview_agent_timeout: "90m"\ntest_agent_timeout: "90m"\n' >> ~/.no-mistakes/config.yaml
+```
+
+Apply it between runs and never restart the shared daemon to force it, because one daemon serves every lane and a restart kills every in-flight run.
+A no-mistakes old enough not to know a key can reject the whole file, so confirm the installed binary carries it before appending: `strings $(command -v no-mistakes) | grep -c '^agent_timeout: '` returns a non-zero count when its own generated config template documents the key.
+Until it is applied, the round-bounding rule in the generated no-mistakes brief (`bin/fm-brief.sh`) is what keeps a round inside the default budget, and [`stuck-crewmate-recovery`](../.agents/skills/stuck-crewmate-recovery/SKILL.md) owns recovering a round the timeout killed.
+
 ## Captain Preferences (data/captain.md / data/captain-shared.md)
 
 Domain-local preferences for one captain's fleet live locally in each home's `data/captain.md`; it is gitignored and printed in the session-start context digest after `data/projects.md` and optional `data/secondmates.md`.

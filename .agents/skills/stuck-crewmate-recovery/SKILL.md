@@ -4,7 +4,7 @@ description: >-
   Agent-only playbook for stuck or missing ordinary direct reports. Load when the session-start
   digest reports a direct report's endpoint dead or its metadata has no window, or after a stale
   wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate,
-  or a failed steer.
+  a failed steer, or a validation round no-mistakes' agent timeout killed.
 user-invocable: false
 metadata:
   internal: true
@@ -12,7 +12,7 @@ metadata:
 
 # stuck-crewmate-recovery
 
-Use this playbook when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or when a direct report is stale, looping, repeatedly confused, asking a question its brief already answers, unresponsive, or when a steer failed to land.
+Use this playbook when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or when a direct report is stale, looping, repeatedly confused, asking a question its brief already answers, unresponsive, when a steer failed to land, or when a validation round was killed by no-mistakes' agent timeout.
 
 Interrupt, stop, and relaunch a worker through `bin/fm-control.sh <task-id> interrupt|exit|relaunch`, which resolves the recorded runtime itself, verifies each action, and never tears down or discards anything ([`docs/agent-control.md`](../../../docs/agent-control.md)).
 That plane covers workers running in this home; a remotely placed secondmate is refused by name and reconciled through `secondmate-provisioning` instead.
@@ -53,3 +53,10 @@ Escalate in order:
    A low context reading is not wedging; modern harnesses auto-compact and keep going.
    The worktree and commits persist, so relaunch is cheap.
 5. If a second relaunch fails too, write `failed` to the backlog and tell the captain the plain failure, preserved work, and consequence using `AGENTS.md` section 9; do not mention metadata, harness, window, or worktree unless the path itself is needed for action.
+
+## A validation round the agent timeout killed
+
+A pipeline round that outlives no-mistakes' wall-clock agent timeout fails the run and leaves that agent's changes uncommitted in its run worktree, so the work is neither lost nor landed; [`configuration.md`](../../../docs/configuration.md) owns the timeout keys and this fleet's value, and the generated no-mistakes brief already tells each round to make its change and stop.
+Recover it by content, never by trusting the killed round's own summary of what it did.
+Have the worker settle branch ownership first, using axi sync's guarded recovery only when structured status asks for it, then compare the run worktree against the branch head and account for every difference by what that difference contains.
+Re-run the project's suites over the reconciled tree yourself before starting a fresh run, because the killed round never reached the step that would have run them.

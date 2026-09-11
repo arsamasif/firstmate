@@ -354,6 +354,41 @@ test_no_mistakes_dod_wording() {
   pass "fm-brief.sh: no-mistakes DOD keeps its apostrophe prose, now parse-safe"
 }
 
+# The generated no-mistakes brief is the only mechanical carrier of the
+# round-bounding rule: a fix, rebase, or document round that spends the
+# pipeline's wall-clock agent timeout re-verifying is killed with its work
+# uncommitted. Drive the real script and read the produced brief so no future
+# scaffold can drop the rule silently, and prove it stays out of the faster
+# paths, which dispatch no pipeline rounds at all.
+test_no_mistakes_dod_bounds_dispatched_rounds() {
+  local home id brief
+  home="$TMP_ROOT/round-bound-home"
+  write_registry "$home"
+  id="brief-round-bound-c1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "no-mistakes brief scaffold exited non-zero"
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "brief was not scaffolded"
+  assert_grep "Bound every agent round a gate dispatches" "$brief" \
+    "no-mistakes DOD lost the round-bounding rule"
+  assert_grep "name the precise per-file change you expect and tell that round to make it and STOP" "$brief" \
+    "round-bounding rule lost its per-file plan and stop instruction"
+  assert_grep "no test-suite runs, no build or engine launches, and no other long-running project tooling inside the step" "$brief" \
+    "round-bounding rule lost the forbidden long-running work"
+  assert_grep "killed with its work uncommitted" "$brief" \
+    "round-bounding rule lost the consequence that motivates it"
+  assert_grep "Three firstmate-specific rules layer on top of that guidance:" "$brief" \
+    "no-mistakes DOD must count the round-bounding rule among its firstmate-specific rules"
+  for id_mode in "brief-round-bound-c2:direct-PR" "brief-round-bound-c3:local-only"; do
+    id=${id_mode%%:*}
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "${id_mode#*:}" >/dev/null 2>&1 \
+      || fail "${id_mode#*:} brief scaffold exited non-zero"
+    assert_no_grep "Bound every agent round a gate dispatches" "$home/data/$id/brief.md" \
+      "${id_mode#*:} brief must not carry the pipeline round-bounding rule"
+  done
+  pass "fm-brief.sh: no-mistakes DOD bounds every agent round a gate dispatches"
+}
+
 test_ship_project_memory_wording() {
   local home id brief
   home="$TMP_ROOT/project-memory-home"
@@ -760,6 +795,7 @@ test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
+test_no_mistakes_dod_bounds_dispatched_rounds
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path

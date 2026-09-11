@@ -34,6 +34,11 @@
 #   direct-PR    implement -> push + open PR via gh-axi (no pipeline) -> configured merge authority
 #   local-only   implement on branch, stop and report "ready in branch" (no push/PR);
 #                the configured merge authority approves, firstmate merges to local main
+# The generated no-mistakes definition of done also bounds every agent round a gate
+# dispatches: fix, rebase, and document guidance names the precise per-file change and
+# forbids suites, builds, and other long-running project tooling inside the step, so a
+# round does not spend no-mistakes' wall-clock agent timeout re-verifying and get killed
+# with its work uncommitted. docs/configuration.md owns that timeout's keys and value.
 # no-mistakes-prod-only is a registry policy, not a task mode; resolve it to one of
 # the three concrete modes at intake before calling this script.
 # The generated ship brief records the chosen mode as a fixed machine-readable
@@ -417,7 +422,9 @@ Follow the guidance no-mistakes itself provides for the mechanics: it loads when
 When starting no-mistakes, make \`--intent\` preserve all relevant content from this brief's \`# Task\` section plus every later accepted Firstmate requirement, clarification, constraint, exclusion, and supersession, carrying only each requirement's current accepted form; retain direct requirements instead of substituting a diff summary, and exclude generic operational, status, delivery, and other scaffold boilerplate unless it is task-specific.
 Do not hand-edit, commit, or fix findings yourself while a run is active - the pipeline applies every fix.
 
-Two firstmate-specific rules layer on top of that guidance:
+Three firstmate-specific rules layer on top of that guidance:
+- Bound every agent round a gate dispatches. When you answer a gate with fix, rebase, or document guidance, name the precise per-file change you expect and tell that round to make it and STOP: no test-suite runs, no build or engine launches, and no other long-running project tooling inside the step.
+  Each round runs under a wall-clock agent timeout, and a round that spends that budget re-verifying instead of editing is killed with its work uncommitted; the pipeline runs the suites itself at the steps that own them.
 - ask-user findings are never yours to answer: escalate to firstmate (rule 6) and stop.
   Firstmate applies \`ask-user-authority\` and obtains any required captain decision.
   When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
