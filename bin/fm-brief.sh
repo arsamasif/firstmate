@@ -38,7 +38,8 @@
 # dispatches: fix, rebase, and document guidance names the precise per-file change and
 # forbids suites, builds, and other long-running project tooling inside the step, so a
 # round does not spend no-mistakes' wall-clock agent timeout re-verifying and get killed
-# with its work uncommitted. docs/configuration.md owns that timeout's keys and value.
+# with some, all, or none of its work committed. docs/configuration.md owns that
+# timeout's keys and value.
 # no-mistakes-prod-only is a registry policy, not a task mode; resolve it to one of
 # the three concrete modes at intake before calling this script.
 # The generated ship brief records the chosen mode as a fixed machine-readable
@@ -424,7 +425,7 @@ Do not hand-edit, commit, or fix findings yourself while a run is active - the p
 
 Three firstmate-specific rules layer on top of that guidance:
 - Bound every agent round a gate dispatches. When you answer a gate with fix, rebase, or document guidance, name the precise per-file change you expect and tell that round to make it and STOP: no test-suite runs, no build or engine launches, and no other long-running project tooling inside the step.
-  Each round runs under a wall-clock agent timeout, and a round that spends that budget re-verifying instead of editing is killed with its work uncommitted; the pipeline runs the suites itself at the steps that own them.
+  Each round runs under a wall-clock agent timeout, and a round that spends that budget re-verifying instead of editing is killed with some, all, or none of its work committed; the pipeline runs the suites itself at the steps that own them.
 - ask-user findings are never yours to answer: escalate to firstmate (rule 6) and stop.
   Firstmate applies \`ask-user-authority\` and obtains any required captain decision.
   When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.

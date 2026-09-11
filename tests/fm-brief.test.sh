@@ -375,7 +375,7 @@ test_no_mistakes_dod_bounds_dispatched_rounds() {
     "round-bounding rule lost its per-file plan and stop instruction"
   assert_grep "no test-suite runs, no build or engine launches, and no other long-running project tooling inside the step" "$brief" \
     "round-bounding rule lost the forbidden long-running work"
-  assert_grep "killed with its work uncommitted" "$brief" \
+  assert_grep "killed with some, all, or none of its work committed" "$brief" \
     "round-bounding rule lost the consequence that motivates it"
   assert_grep "Three firstmate-specific rules layer on top of that guidance:" "$brief" \
     "no-mistakes DOD must count the round-bounding rule among its firstmate-specific rules"
