@@ -193,21 +193,16 @@ no-mistakes bounds each pipeline agent invocation by wall clock and fails the ru
 Three keys carry it, each defaulting to `30m`: `agent_timeout` covers the document, lint, rebase, PR, CI-fix, and auto-fix steps, `review_agent_timeout` covers one whole review round including its review-fix and rereview turns, and `test_agent_timeout` covers the Test step including its evidence turn.
 Thirty minutes is short for a repository whose agent instructions run to thousands of lines, whose largest source file is big, or whose test command takes minutes: a round there is killed while still producing output, which is scale rather than a stalled agent.
 This fleet uses `90m` for all three.
-A no-mistakes old enough not to know a key can reject the whole file, so confirm the installed binary carries it before applying the loop: `strings $(command -v no-mistakes) | grep -c '^agent_timeout: '` returns a non-zero count when its own generated config template documents the key.
+A no-mistakes old enough not to know a key can reject the whole file, so confirm the installed binary carries every key the command writes before applying it: `strings $(command -v no-mistakes) | grep -Ec '^(agent_timeout|review_agent_timeout|test_agent_timeout): '` counts them in its own generated config template, and all three must be present.
 
-They live in the machine-wide `~/.no-mistakes/config.yaml`, not in the tracked `.no-mistakes.yaml`, so they are applied once per machine, and a config an older no-mistakes wrote lacks them entirely while one no-mistakes generated itself already carries all three at `30m`:
+They are documented and applied in the machine-wide `~/.no-mistakes/config.yaml`, which is per machine and not tracked in this repo, and a config an older no-mistakes wrote lacks them entirely while one no-mistakes generated itself already carries all three at `30m`:
 
 ```sh
-for k in agent_timeout review_agent_timeout test_agent_timeout; do
-  if grep -q "^$k:" ~/.no-mistakes/config.yaml; then
-    sed -i "s|^$k:.*|$k: \"90m\"|" ~/.no-mistakes/config.yaml
-  else
-    printf '%s: "90m"\n' "$k" >> ~/.no-mistakes/config.yaml
-  fi
-done
+awk 'BEGIN{n=split("agent_timeout review_agent_timeout test_agent_timeout",k," ")} {for(i=1;i<=n;i++) if($0 ~ "^"k[i]":"){$0=k[i]": \"90m\""; seen[i]=1} print} END{for(i=1;i<=n;i++) if(!seen[i]) print k[i]": \"90m\""}' ~/.no-mistakes/config.yaml > /tmp/no-mistakes-config.yaml && mv /tmp/no-mistakes-config.yaml ~/.no-mistakes/config.yaml
 ```
 
-The loop sets each key to `90m` whether or not it was already present, rewriting a present key in place and appending only a missing one, so pasting it twice changes nothing further and never produces a duplicate key.
+It rewrites the file through a temporary file in one POSIX awk pass, setting each of the three keys to `90m` whether it was already present or absent, so it behaves the same on stock macOS as on GNU.
+A present key is rewritten in place and a missing one is appended on its own line, so pasting it twice changes nothing further, it never produces a duplicate key, and it cannot concatenate onto a final line that lacks a newline.
 Apply it between runs and never restart the shared daemon to force it, because one daemon serves every lane and a restart kills every in-flight run.
 The value governs runs started after it is applied, and if rounds still stop at the old budget it takes effect no later than the daemon's next restart, which is firstmate's call for that same reason.
 Until it is applied, the round-bounding rule in the generated no-mistakes brief (`bin/fm-brief.sh`) is what keeps a round inside the default budget, and [`stuck-crewmate-recovery`](../.agents/skills/stuck-crewmate-recovery/SKILL.md) owns recovering a round the timeout killed.

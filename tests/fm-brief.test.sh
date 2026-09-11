@@ -356,10 +356,10 @@ test_no_mistakes_dod_wording() {
 
 # The generated no-mistakes brief is the only mechanical carrier of the
 # round-bounding rule: a fix, rebase, or document round that spends the
-# pipeline's wall-clock agent timeout re-verifying is killed with its work
-# uncommitted. Drive the real script and read the produced brief so no future
-# scaffold can drop the rule silently, and prove it stays out of the faster
-# paths, which dispatch no pipeline rounds at all.
+# pipeline's wall-clock agent timeout re-verifying is killed with some, all, or
+# none of its work committed. Drive the real script and read the produced
+# brief so no future scaffold can drop the rule silently, and prove it stays
+# out of the faster paths, which dispatch no pipeline rounds at all.
 test_no_mistakes_dod_bounds_dispatched_rounds() {
   local home id brief
   home="$TMP_ROOT/round-bound-home"
