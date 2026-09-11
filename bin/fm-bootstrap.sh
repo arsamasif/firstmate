@@ -13,6 +13,7 @@
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "TANGLE: <remediation>",
+#                 "NO_MISTAKES_DAEMON: <remediation>",
 #                 "LIMIT_RESUME: <remediation>" and
 #                 "BOOTSTRAP_INFO: usage-limit resume armed (...)"
 #                 (bin/fm-limit-resume.sh bootstrap-lines owns both),
@@ -48,6 +49,13 @@
 #          failed names whether the endpoint was missing or agent-less.
 #          Already-live and successfully relaunched secondmates are silent
 #          unless FM_BOOTSTRAP_VERBOSE_FACTS=1 requests BOOTSTRAP_INFO facts.
+#          A NO_MISTAKES_DAEMON line means this home has no-mistakes-mode work
+#          recorded while `no-mistakes daemon status` reports the daemon stopped,
+#          so no pipeline run in this home can make progress. The daemon is
+#          SHARED by every lane and home and firstmate alone owns its lifecycle
+#          (bin/fm-brief.sh forbids a worker touching it), so the line names the
+#          exact start command for firstmate to run. A running daemon, an
+#          unreadable status, and a home with no no-mistakes work are all silent.
 #          A TANGLE line means the firstmate primary checkout (FM_ROOT) is stranded
 #          on a feature branch instead of its default branch - a crewmate's work
 #          landed in the primary instead of its own worktree; restore it per the line.
@@ -1243,6 +1251,39 @@ detect_local_tools() {
   fi
 }
 
+# True when any task recorded in this home ships through the no-mistakes pipeline.
+home_has_no_mistakes_work() {
+  local meta
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] || continue
+    if grep -Fxq 'mode=no-mistakes' "$meta" 2>/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# One actionable line when this home's own no-mistakes work cannot progress
+# because the shared daemon is down. Scoped to homes that actually have such
+# work recorded, so a direct-PR or local-only home is never told to start a
+# daemon it does not use. Only an explicit stopped verdict prints: an
+# unreadable, slow, or unrecognized status is left silent rather than guessed
+# at, because the daemon is shared and a wrong start command is operator noise.
+# Both stopped spellings the tool emits are accepted (`daemon stopped` and
+# `daemon not running`, verified against no-mistakes v1.60.2 on 2026-09-11), so
+# a release that settles on either one keeps working.
+no_mistakes_daemon_detect() {
+  local status
+  command -v no-mistakes >/dev/null 2>&1 || return 0
+  home_has_no_mistakes_work || return 0
+  status=$(timeout 20 no-mistakes daemon status 2>/dev/null) || status=""
+  case "$status" in
+    *"daemon stopped"*|*"daemon not running"*)
+      echo "NO_MISTAKES_DAEMON: the shared no-mistakes daemon is stopped while this home has no-mistakes work recorded, so its pipeline runs cannot progress - start it with: cd '$FM_HOME' && no-mistakes daemon start"
+      ;;
+  esac
+}
+
 detect_local_config() {
   # Worktree-tangle check: the firstmate primary checkout (FM_ROOT) must sit on its
   # default branch, not a feature branch (see fm-tangle-lib.sh). Scoped to the
@@ -1270,6 +1311,7 @@ detect_local_config() {
     echo "MISSING_MANUAL: cursor-agent (instructions: $(manual_install_url cursor-agent))"
   fi
   crew_dispatch_validate
+  no_mistakes_daemon_detect
   # Usage-limit resume arming: one BOOTSTRAP_INFO fact when the tokenless sweep
   # is armed, an actionable LIMIT_RESUME line when it is not or when this
   # primary cannot be reached by it; bin/fm-limit-resume.sh owns the wording.

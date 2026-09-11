@@ -39,6 +39,12 @@
 #   (p) fm-pr-check when local HEAD lags                        -> record remote PR head
 #   (q) no-mistakes + NO pr= recorded, PR discovered by branch  -> ALLOW  (yolo/no-CI merge)
 #
+# Also covers the leaked-process reap's exclusion for the SHARED no-mistakes daemon,
+# which one lane's teardown SIGTERMed on 2026-09-10 and so failed two sibling lanes'
+# in-flight pipeline runs:
+#   (z)  daemon-shaped process at the worktree cwd -> SPARED and named (leak beside it still reaped)
+#   (aa) pid recorded in the daemon lock file      -> SPARED with its descendants
+#
 # Also covers backlog teardown-lock-race: a git index.lock left in the worktree by a
 # killed crew process (bin/fm-teardown.sh's teardown_treehouse_return).
 #   (r) provably-stale index.lock (old mtime, no live holder) -> lock removed, ALLOW
@@ -2232,6 +2238,113 @@ test_leaked_worktree_process_is_reaped() {
   pass "a leaked descendant process rooted under the task's worktree is reaped by teardown, not left surviving"
 }
 
+# The shared no-mistakes daemon can end up with a task worktree as its cwd (a
+# crewmate started it there after a reboot), which makes it indistinguishable
+# from leaked task work to the cwd scan. Reaping it kills every other lane's
+# in-flight pipeline run, so teardown must spare it - while still reaping the
+# genuine leak beside it, which is what the positive control in each case pins.
+child_pid_of() {  # <pid>
+  LC_ALL=C ps -eo pid=,ppid= 2>/dev/null \
+    | awk -v parent="$1" '$2 == parent { print $1; exit }'
+}
+
+assert_alive_then_kill() {  # <pid> <description>
+  local pid=$1 description=$2
+  kill -0 "$pid" 2>/dev/null || fail "$description"
+  kill -KILL "$pid" 2>/dev/null || true
+}
+
+test_daemon_shaped_process_is_spared_while_leaked_process_is_reaped() {
+  local case_dir rc daemon_pid daemon_child leaked_pid
+  case_dir=$(make_case daemon-spare-shape)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+
+  # A process whose command line has the daemon's own shape, running with the
+  # task worktree as its cwd. Its `sleep` child inherits that cwd, so the
+  # descendant rule is exercised too.
+  mkdir -p "$case_dir/fakedaemon"
+  cat > "$case_dir/fakedaemon/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+sleep 300
+SH
+  chmod +x "$case_dir/fakedaemon/no-mistakes"
+  ( cd "$case_dir/wt" && exec "$case_dir/fakedaemon/no-mistakes" daemon run ) &
+  daemon_pid=$!
+  disown
+
+  # Positive control: an ordinary leaked process at the very same cwd.
+  ( cd "$case_dir/wt" && exec sleep 300 ) &
+  leaked_pid=$!
+  disown
+
+  sleep 0.5
+  kill -0 "$daemon_pid" 2>/dev/null || fail "daemon-spare-shape: setup daemon did not start"
+  kill -0 "$leaked_pid" 2>/dev/null || fail "daemon-spare-shape: setup control process did not start"
+  daemon_child=$(child_pid_of "$daemon_pid")
+  [ -n "$daemon_child" ] || fail "daemon-spare-shape: setup daemon spawned no child"
+
+  rc=0
+  FM_NO_MISTAKES_HOME_OVERRIDE="$case_dir/no-such-no-mistakes-home" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 0 "$rc" "daemon-spare-shape: teardown should still succeed"
+  assert_alive_then_kill "$daemon_pid" \
+    "daemon-spare-shape: the shared no-mistakes daemon was reaped by teardown"
+  assert_alive_then_kill "$daemon_child" \
+    "daemon-spare-shape: a no-mistakes daemon child was reaped by teardown"
+  if kill -0 "$leaked_pid" 2>/dev/null; then
+    kill -KILL "$leaked_pid" 2>/dev/null || true
+    fail "daemon-spare-shape: the genuinely leaked worktree process survived teardown"
+  fi
+  assert_grep "sparing the shared no-mistakes daemon" "$case_dir/stderr" \
+    "daemon-spare-shape: teardown did not name what it spared"
+  assert_grep "reaping leaked worktree process" "$case_dir/stderr" \
+    "daemon-spare-shape: teardown did not report reaping the genuine leak"
+  pass "teardown spares a daemon-shaped process under the task worktree, names it, and still reaps the leak beside it"
+}
+
+test_recorded_daemon_pid_is_spared_whatever_its_command_shape() {
+  local case_dir rc daemon_pid daemon_child leaked_pid
+  case_dir=$(make_case daemon-spare-lock)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+
+  # No daemon-shaped command line here: the only thing marking this process as
+  # the daemon is the pid recorded in the lock file, which is what keeps a
+  # future release's different command shape from being reaped.
+  ( cd "$case_dir/wt" && exec bash -c 'sleep 300; :' ) &
+  daemon_pid=$!
+  disown
+  ( cd "$case_dir/wt" && exec sleep 300 ) &
+  leaked_pid=$!
+  disown
+
+  sleep 0.5
+  daemon_child=$(child_pid_of "$daemon_pid")
+  [ -n "$daemon_child" ] || fail "daemon-spare-lock: setup daemon spawned no child"
+  mkdir -p "$case_dir/nm-home"
+  printf '{"pid":%s,"started_at":"2026-09-10T13:37:46Z"}\n' "$daemon_pid" \
+    > "$case_dir/nm-home/daemon.lock"
+
+  rc=0
+  FM_NO_MISTAKES_HOME_OVERRIDE="$case_dir/nm-home" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 0 "$rc" "daemon-spare-lock: teardown should still succeed"
+  assert_alive_then_kill "$daemon_pid" \
+    "daemon-spare-lock: the recorded daemon pid was reaped by teardown"
+  assert_alive_then_kill "$daemon_child" \
+    "daemon-spare-lock: a descendant of the recorded daemon pid was reaped by teardown"
+  if kill -0 "$leaked_pid" 2>/dev/null; then
+    kill -KILL "$leaked_pid" 2>/dev/null || true
+    fail "daemon-spare-lock: the genuinely leaked worktree process survived teardown"
+  fi
+  assert_grep "sparing the shared no-mistakes daemon" "$case_dir/stderr" \
+    "daemon-spare-lock: teardown did not name what it spared"
+  pass "teardown spares the pid recorded in the daemon lock file and its descendants, and still reaps the leak beside it"
+}
+
 test_leaked_tasktmp_process_is_reaped() {
   local case_dir rc pid
   case_dir=$(make_case leaked-tasktmp-reap)
@@ -2640,6 +2753,8 @@ test_not_found_status_after_abort_confirms_completion
 test_another_branchs_parked_run_is_never_touched
 test_own_autonomous_run_is_left_alone
 test_leaked_worktree_process_is_reaped
+test_daemon_shaped_process_is_spared_while_leaked_process_is_reaped
+test_recorded_daemon_pid_is_spared_whatever_its_command_shape
 test_leaked_tasktmp_process_is_reaped
 test_lsof_absent_reaps_tmux_process_group
 test_lsof_error_refuses_before_removal

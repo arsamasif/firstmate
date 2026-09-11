@@ -4,7 +4,8 @@ description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics. Load whenever the digest's
   bootstrap or NETWORK CHECKS section, or a standalone bin/fm-bootstrap.sh or
   bin/fm-startup-network.sh run, prints an actionable diagnostic line such as MISSING:, TANGLE:,
-  NEEDS_GH_AUTH, FLEET_SYNC:, NETWORK_CHECKS:, PR_CHECK_MIGRATION:, or any SECONDMATE_ line.
+  NEEDS_GH_AUTH, NO_MISTAKES_DAEMON:, FLEET_SYNC:, NETWORK_CHECKS:, PR_CHECK_MIGRATION:, or any
+  SECONDMATE_ line.
   Silence or a BOOTSTRAP_INFO: fact needs no load.
 user-invocable: false
 metadata:
@@ -34,6 +35,9 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `TANGLE: <remediation>` - the primary checkout is stranded on a feature branch instead of its default branch; `AGENTS.md` section 8 explains why this guard exists and what it protects.
   The work is safe on that branch ref; restore the primary to its default branch with the printed `git -C <root> checkout <default>`, then re-validate that branch in a proper worktree.
   This is the only sanctioned firstmate-initiated git write to the primary, and it is a non-destructive branch switch that strands nothing.
+- `NO_MISTAKES_DAEMON: <remediation>` - the shared no-mistakes daemon is stopped while this home has validation work recorded, so none of its pipeline runs can progress.
+  Firstmate alone owns that daemon, and the generated worker brief forbids a worker starting, stopping, or restarting it, so start it yourself with the printed command before dispatching or resuming no-mistakes work.
+  One instance serves every lane and home, so never restart or stop a daemon that is already running: that kills every other lane's in-flight run.
 - `STARTUP_MEMORY_BUDGET: invalid config/startup-memory-budget - <reason>` - the visible startup-memory budget is not a safe one-line positive decimal file; do not infer the default or propagate it.
   Correct the local primary file, then rerun session start so the normal convergence path can deliver the validated value to secondmate homes.
 - `CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>` - the optional dispatch profile file exists but failed low-cost bootstrap validation; stop profile-based dispatch, report the actionable error, and require correction of the malformed schema, unverified harness name, or invalid harness/effort pair rather than falling back around it or selecting a bad profile.

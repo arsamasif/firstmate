@@ -82,6 +82,10 @@ if [ "${1:-}" = --version ]; then
   printf '%s\n' "${FM_FAKE_NO_MISTAKES_VERSION:-no-mistakes version v1.46.0 (fake) 2026-06-27T00:02:18Z}"
   exit 0
 fi
+if [ "${1:-}" = daemon ] && [ "${2:-}" = status ]; then
+  printf '  %s\n' "${FM_FAKE_NM_DAEMON_STATUS:-● daemon running (pid 4242)}"
+  exit 0
+fi
 exit 0
 SH
   chmod +x "$fakebin/no-mistakes"
@@ -881,6 +885,53 @@ test_routine_bootstrap_contract_runs_under_system_bash() {
   pass "bootstrap routine contract runs under system /bin/bash"
 }
 
+# The no-mistakes daemon is SHARED by every lane and home, so firstmate owns its
+# lifecycle and bootstrap owns its absence: one actionable line when this home's
+# own no-mistakes work cannot progress. The two ways to be silent matter as much
+# as the line itself - a running daemon, and a home whose recorded work never
+# uses the pipeline at all.
+test_stopped_no_mistakes_daemon_reports_only_with_no_mistakes_work() {
+  local label mode status expect case_dir fakebin home out n=0
+  while IFS='^' read -r label mode status expect; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    case_dir="$TMP_ROOT/nm-daemon-$label"
+    home="$case_dir/home"
+    mkdir -p "$home/state" "$home/config"
+    printf '%s\n' manual > "$home/config/backlog-backend"
+    fakebin=$(make_fake_toolchain "$case_dir")
+    fm_write_meta "$home/state/task-a.meta" \
+      "window=firstmate:fm-task-a" \
+      "kind=ship" \
+      "mode=$mode"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_BACKEND=tmux FM_HOME="$home" \
+      FM_ROOT_OVERRIDE="$ROOT" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
+      FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK=skip \
+      FM_FAKE_NM_DAEMON_STATUS="$status" \
+      "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    case "$expect" in
+      line)
+        case "$out" in
+          *"NO_MISTAKES_DAEMON: "*"no-mistakes daemon start"*) ;;
+          *) fail "$label: expected a NO_MISTAKES_DAEMON line naming the start command, got: $out" ;;
+        esac
+        ;;
+      silent)
+        case "$out" in
+          *NO_MISTAKES_DAEMON*) fail "$label: expected no daemon diagnostic, got: $out" ;;
+        esac
+        ;;
+    esac
+  done <<'ROWS'
+stopped-with-work^no-mistakes^○ daemon stopped^line
+not-running-with-work^no-mistakes^○ daemon not running^line
+running-with-work^no-mistakes^● daemon running (pid 4242)^silent
+stopped-without-work^direct-PR^○ daemon stopped^silent
+ROWS
+  [ "$n" -eq 4 ] || fail "expected 4 daemon-status rows, ran $n"
+  pass "bootstrap reports a stopped no-mistakes daemon only when this home has no-mistakes work recorded"
+}
+
 # FM_BOOTSTRAP_NETWORK splits one bootstrap run into its local and network
 # halves so a session start can compose its digest from the local half alone and
 # run the network half concurrently. The property that has to hold is that the
@@ -1176,3 +1227,4 @@ test_network_phases_record_per_step_elapsed_times
 test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
+test_stopped_no_mistakes_daemon_reports_only_with_no_mistakes_work
