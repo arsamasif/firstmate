@@ -184,7 +184,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # Bound on the shared no-mistakes daemon status probe. A non-positive or
 # non-numeric override is not a bound, so it resolves to the default.
 FM_NO_MISTAKES_DAEMON_TIMEOUT=${FM_NO_MISTAKES_DAEMON_TIMEOUT:-20}
-case "$FM_NO_MISTAKES_DAEMON_TIMEOUT" in ''|*[!0-9]*|0) FM_NO_MISTAKES_DAEMON_TIMEOUT=20 ;; esac
+case "$FM_NO_MISTAKES_DAEMON_TIMEOUT" in ''|*[!0-9]*) FM_NO_MISTAKES_DAEMON_TIMEOUT=20 ;; esac
+[ "$FM_NO_MISTAKES_DAEMON_TIMEOUT" -gt 0 ] || FM_NO_MISTAKES_DAEMON_TIMEOUT=20
 
 # Network-phase selection (see the header). An unrecognized value resolves to
 # `all` so a malformed override runs every step rather than silently dropping a
@@ -1281,9 +1282,13 @@ home_has_no_mistakes_work() {
 # daemon it does not use. Only an explicit stopped verdict prints: an
 # unreadable, slow, or unrecognized status is left silent rather than guessed
 # at, because the daemon is shared and a wrong start command is operator noise.
-# A hit bound is exactly that unreadable case: fm_run_timed returns 124 and the
-# empty status matches no arm. The vendor CLI stays the single source of the
-# daemon's state; this file never reads ~/.no-mistakes/daemon.lock to guess it.
+# A hit bound is exactly that unreadable case: fm_run_timed returns 124, the
+# status is discarded, and the empty status matches no arm. Every OTHER exit
+# status keeps its output, because the verdict lives in the vendor's status TEXT
+# and a release that reports a stopped daemon with a non-zero exit must still be
+# read. The vendor CLI stays the single source of the daemon's state; this file
+# never reads ~/.no-mistakes/daemon.lock, and never infers a verdict from an
+# exit status alone.
 # Both stopped spellings the tool emits are accepted (`daemon stopped` and
 # `daemon not running`, verified against no-mistakes v1.60.2 on 2026-09-11), so
 # a release that settles on either one keeps working.
@@ -1293,8 +1298,10 @@ no_mistakes_daemon_detect() {
   local status
   command -v no-mistakes >/dev/null 2>&1 || return 0
   home_has_no_mistakes_work || return 0
+  local rc=0
   status=$(fm_run_timed "$FM_NO_MISTAKES_DAEMON_TIMEOUT" no-mistakes daemon status 2>/dev/null) \
-    || status=""
+    || rc=$?
+  [ "$rc" -ne 124 ] || status=""
   case "$status" in
     *"daemon stopped"*|*"daemon not running"*)
       echo "NO_MISTAKES_DAEMON: the shared no-mistakes daemon is stopped while this home has no-mistakes work recorded, so its pipeline runs cannot progress - start it with: cd '$FM_HOME' && no-mistakes daemon start"
