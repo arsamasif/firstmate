@@ -187,6 +187,29 @@ It does not set `commands.test` to a complete `tests/*.test.sh` walk.
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the firstmate-specific local test policy and entry points.
 Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](fm-test-portable-shards.md); [herdr-backend.md](herdr-backend.md#destructive-lab-safety) owns the real-Herdr lane's isolation boundary, and [runtime-backends.md](verification/runtime-backends.md#herdr) owns active evidence.
 
+## Per-step agent timeout (~/.no-mistakes/config.yaml)
+
+no-mistakes bounds each pipeline agent invocation by wall clock and fails the run when that budget elapses, at whatever point the killed round had reached, so some, all, or none of its work may already be committed in its run worktree.
+Three keys carry it, each defaulting to `30m`: `agent_timeout` covers the document, lint, rebase, PR, CI-fix, and auto-fix steps, `review_agent_timeout` covers one whole review round including its review-fix and rereview turns, and `test_agent_timeout` covers the Test step including its evidence turn.
+Thirty minutes is short for a repository whose agent instructions run to thousands of lines, whose largest source file is big, or whose test command takes minutes: a round there is killed while still producing output, which is scale rather than a stalled agent.
+This fleet's value is `90m` for all three, and the last paragraph of this section owns whether it is in force yet.
+A no-mistakes old enough not to know a key can reject the whole file, so confirm the binary the daemon runs carries every key the command writes before applying it: `strings ~/.no-mistakes/bin/no-mistakes | grep -Ec '^(agent_timeout|review_agent_timeout|test_agent_timeout): '` counts them in its own generated config template, and all three must be present.
+Check that path rather than whatever `command -v no-mistakes` resolves to, because the daemon runs its own binary and the two are not necessarily the same build.
+
+They are documented and applied in the machine-wide `~/.no-mistakes/config.yaml`, which is per machine and not tracked in this repo, and a config an older no-mistakes wrote lacks them entirely while one no-mistakes generated itself already carries all three at `30m`:
+
+```sh
+tmp=$(mktemp ~/.no-mistakes/config.yaml.XXXXXX) && awk 'BEGIN{n=split("agent_timeout review_agent_timeout test_agent_timeout",k," ")} {for(i=1;i<=n;i++) if($0 ~ "^"k[i]":"){$0=k[i]": \"90m\""; seen[i]=1} print} END{for(i=1;i<=n;i++) if(!seen[i]) print k[i]": \"90m\""}' ~/.no-mistakes/config.yaml > "$tmp" && mv "$tmp" ~/.no-mistakes/config.yaml
+```
+
+It rewrites the file in one POSIX awk pass, setting each of the three keys to `90m` whether it was already present or absent, so it behaves the same on stock macOS as on GNU.
+A present key is rewritten in place and a missing one is appended on its own line, so pasting it twice changes nothing further, it never produces a duplicate key, and it cannot concatenate onto a final line that lacks a newline.
+Staging through `mktemp` beside the target rather than in `/tmp` keeps the replacement a same-filesystem rename and keeps the redirect out of a directory another local account can write.
+Apply it between runs and never restart the shared daemon to force it, because one daemon serves every lane and a restart kills every in-flight run.
+Which process reads this file and when was not established, so do not assume the new budget is live: after applying it, confirm on the next round that a round actually gets the longer budget.
+If the old budget is still in force, the value takes effect no later than the daemon's next restart, which is firstmate's call for that same reason.
+Until it is applied, the round-bounding rule in the generated no-mistakes brief (`bin/fm-brief.sh`) is what keeps a round inside the default budget, and [`stuck-crewmate-recovery`](../.agents/skills/stuck-crewmate-recovery/SKILL.md) owns recovering a round the timeout killed.
+
 ## Captain Preferences (data/captain.md / data/captain-shared.md)
 
 Domain-local preferences for one captain's fleet live locally in each home's `data/captain.md`; it is gitignored and printed in the session-start context digest after `data/projects.md` and optional `data/secondmates.md`.
