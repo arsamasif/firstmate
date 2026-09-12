@@ -83,6 +83,9 @@ if [ "${1:-}" = --version ]; then
   exit 0
 fi
 if [ "${1:-}" = daemon ] && [ "${2:-}" = status ]; then
+  if [ "${FM_FAKE_NM_DAEMON_HANG:-0}" = 1 ]; then
+    sleep 30
+  fi
   printf '  %s\n' "${FM_FAKE_NM_DAEMON_STATUS:-● daemon running (pid 4242)}"
   exit 0
 fi
@@ -887,12 +890,16 @@ test_routine_bootstrap_contract_runs_under_system_bash() {
 
 # The no-mistakes daemon is SHARED by every lane and home, so firstmate owns its
 # lifecycle and bootstrap owns its absence: one actionable line when this home's
-# own no-mistakes work cannot progress. The two ways to be silent matter as much
-# as the line itself - a running daemon, and a home whose recorded work never
-# uses the pipeline at all.
+# own no-mistakes work cannot progress. The three ways to be silent matter as
+# much as the line itself - a running daemon, a home whose recorded work never
+# uses the pipeline at all, and a probe that hit its bound before answering,
+# because a shared daemon plus a guessed verdict is operator noise.
+# The probe costs seconds, so it belongs to the DEFERRED phase: the `skip` row
+# proves it no longer runs on the session-start digest's blocking path, and the
+# `only` rows prove it still runs somewhere.
 test_stopped_no_mistakes_daemon_reports_only_with_no_mistakes_work() {
-  local label mode status expect case_dir fakebin home out n=0
-  while IFS='^' read -r label mode status expect; do
+  local label mode status phase hang expect case_dir fakebin home out n=0
+  while IFS='^' read -r label mode status phase hang expect; do
     [ -n "$label" ] || continue
     n=$((n + 1))
     case_dir="$TMP_ROOT/nm-daemon-$label"
@@ -906,8 +913,9 @@ test_stopped_no_mistakes_daemon_reports_only_with_no_mistakes_work() {
       "mode=$mode"
     out=$(PATH="$fakebin:$BASE_PATH" FM_BACKEND=tmux FM_HOME="$home" \
       FM_ROOT_OVERRIDE="$ROOT" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
-      FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK=skip \
-      FM_FAKE_NM_DAEMON_STATUS="$status" \
+      FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK="$phase" \
+      FM_FAKE_NM_DAEMON_STATUS="$status" FM_FAKE_NM_DAEMON_HANG="$hang" \
+      FM_NO_MISTAKES_DAEMON_TIMEOUT=1 \
       "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
     case "$expect" in
       line)
@@ -923,13 +931,15 @@ test_stopped_no_mistakes_daemon_reports_only_with_no_mistakes_work() {
         ;;
     esac
   done <<'ROWS'
-stopped-with-work^no-mistakes^○ daemon stopped^line
-not-running-with-work^no-mistakes^○ daemon not running^line
-running-with-work^no-mistakes^● daemon running (pid 4242)^silent
-stopped-without-work^direct-PR^○ daemon stopped^silent
+stopped-with-work^no-mistakes^○ daemon stopped^only^0^line
+not-running-with-work^no-mistakes^○ daemon not running^only^0^line
+running-with-work^no-mistakes^● daemon running (pid 4242)^only^0^silent
+stopped-without-work^direct-PR^○ daemon stopped^only^0^silent
+stopped-on-the-blocking-path^no-mistakes^○ daemon stopped^skip^0^silent
+hit-bound-with-work^no-mistakes^○ daemon stopped^only^1^silent
 ROWS
-  [ "$n" -eq 4 ] || fail "expected 4 daemon-status rows, ran $n"
-  pass "bootstrap reports a stopped no-mistakes daemon only when this home has no-mistakes work recorded"
+  [ "$n" -eq 6 ] || fail "expected 6 daemon-status rows, ran $n"
+  pass "bootstrap reports a stopped no-mistakes daemon only from the deferred phase, only with no-mistakes work recorded, and never on a hit bound"
 }
 
 # FM_BOOTSTRAP_NETWORK splits one bootstrap run into its local and network

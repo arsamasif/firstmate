@@ -51,10 +51,11 @@
 # report rather than a merge, and a charter is not a delivery contract.
 # There is no --yolo flag here. The worker never owns merge decisions, so yolo is
 # a spawn-time and firstmate-side input only (AGENTS.md section 7).
-# Every scaffold's rules forbid the worker starting, stopping, restarting, or
-# updating the shared no-mistakes daemon: one instance serves every lane and
-# home, so firstmate owns its lifecycle and a daemon error - a stopped daemon
-# included - is a blocker the worker reports rather than fixes.
+# The scout and ship scaffolds' rules forbid the worker starting, stopping,
+# restarting, or updating the shared no-mistakes daemon: one instance serves
+# every lane and home, so firstmate owns its lifecycle and a daemon error - a
+# stopped daemon included - is a blocker the worker reports rather than fixes.
+# The secondmate charter scaffold carries no daemon rule.
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,

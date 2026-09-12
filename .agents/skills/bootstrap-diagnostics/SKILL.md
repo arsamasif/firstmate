@@ -38,6 +38,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `NO_MISTAKES_DAEMON: <remediation>` - the shared no-mistakes daemon is stopped while this home has validation work recorded, so none of its pipeline runs can progress.
   Firstmate alone owns that daemon, and the generated worker brief forbids a worker starting, stopping, or restarting it, so start it yourself with the printed command before dispatching or resuming no-mistakes work.
   One instance serves every lane and home, so never restart or stop a daemon that is already running: that kills every other lane's in-flight run.
+  This probe costs seconds, so like `NEEDS_GH_AUTH` it arrives from the deferred network stage rather than the digest's blocking bootstrap section.
 - `STARTUP_MEMORY_BUDGET: invalid config/startup-memory-budget - <reason>` - the visible startup-memory budget is not a safe one-line positive decimal file; do not infer the default or propagate it.
   Correct the local primary file, then rerun session start so the normal convergence path can deliver the validated value to secondmate homes.
 - `CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>` - the optional dispatch profile file exists but failed low-cost bootstrap validation; stop profile-based dispatch, report the actionable error, and require correction of the malformed schema, unverified harness name, or invalid harness/effort pair rather than falling back around it or selecting a bad profile.

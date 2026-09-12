@@ -887,10 +887,11 @@ fi
 stage network-checks
 section "NETWORK CHECKS"
 if [ "$READ_ONLY" -eq 1 ]; then
-  printf 'skipped (read-only session) - GitHub authentication, project clone refresh,\n'
-  printf 'secondmate liveness and convergence, and pending handoff delivery were not run.\n'
-  printf 'They need the fleet lock, and this session must not spawn, steer, or merge, so it\n'
-  printf 'has no action they would gate. The session holding the lock runs them.\n'
+  printf 'skipped (read-only session) - GitHub authentication, the shared no-mistakes daemon\n'
+  printf 'status, project clone refresh, secondmate liveness and convergence, and pending\n'
+  printf 'handoff delivery were not run. They belong to the deferred stage this session must\n'
+  printf 'not start, and this session must not spawn, steer, or merge, so it has no action\n'
+  printf 'they would gate. The session holding the lock runs them.\n'
 else
   "$SCRIPT_DIR/fm-startup-network.sh" harvest --pid $$ 2>&1 || true
 fi

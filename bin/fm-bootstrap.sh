@@ -102,20 +102,25 @@
 #          X-mode artifacts, project clones, or repair instructions.
 #          Unset/0 (the default) runs all six sweeps - this flag is purely
 #          additive.
-#          Set FM_BOOTSTRAP_NETWORK to split this run by whether a step talks to
-#          the network, so a session start can print its digest from local reads
-#          alone and run the network half off the digest's blocking path:
-#            all  (default, and any unrecognized value) - every local and network
-#                 step. Unrecognized values fall back here on purpose: a typo
-#                 must never silently skip a safety sweep.
-#            skip - every LOCAL step, and none of the network ones. Skips
-#                 `gh auth status`, secondmate_liveness_sweep, secondmate_sync,
+#          Set FM_BOOTSTRAP_NETWORK to split this run by whether a step is CHEAP
+#          enough for the digest's blocking path, so a session start can print
+#          its digest from cheap local reads alone and run the slow half off that
+#          path. Network calls are the bulk of the slow half, but the split is by
+#          cost, not by medium: a local probe measured in seconds belongs in the
+#          deferred half too, and the no-mistakes daemon status probe is one.
+#            all  (default, and any unrecognized value) - every cheap and every
+#                 deferred step. Unrecognized values fall back here on purpose: a
+#                 typo must never silently skip a safety sweep.
+#            skip - every CHEAP local step, and none of the deferred ones. Skips
+#                 `gh auth status`, no_mistakes_daemon_detect,
+#                 secondmate_liveness_sweep, secondmate_sync,
 #                 secondmate_handoff_resume, and fleet_sync.
-#            only - ONLY those network steps and nothing else. No tool detection,
+#            only - ONLY those deferred steps and nothing else. No tool detection,
 #                 no version floors, no tangle check, no PR-check migration, no
 #                 x_mode_setup: those already ran on the local pass.
 #          FM_BOOTSTRAP_DETECT_ONLY composes with it unchanged, so `only` plus
-#          detect-only is the read-only `gh auth status` probe on its own.
+#          detect-only is the read-only `gh auth status` and daemon-status probes
+#          on their own.
 #          bin/fm-startup-network.sh owns the deferral: it runs the `only` phase
 #          in a detached bounded worker and publishes the result. This file stays
 #          the single owner of every sweep, and the split changes only WHEN each
@@ -173,6 +178,13 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # deferred network stage sets, so an ordinary bootstrap run records nothing.
 # shellcheck source=bin/fm-timing-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-timing-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-timeout-lib.sh"  # fm_run_timed: the shared hard bound
+
+# Bound on the shared no-mistakes daemon status probe. A non-positive or
+# non-numeric override is not a bound, so it resolves to the default.
+FM_NO_MISTAKES_DAEMON_TIMEOUT=${FM_NO_MISTAKES_DAEMON_TIMEOUT:-20}
+case "$FM_NO_MISTAKES_DAEMON_TIMEOUT" in ''|*[!0-9]*|0) FM_NO_MISTAKES_DAEMON_TIMEOUT=20 ;; esac
 
 # Network-phase selection (see the header). An unrecognized value resolves to
 # `all` so a malformed override runs every step rather than silently dropping a
@@ -1269,14 +1281,20 @@ home_has_no_mistakes_work() {
 # daemon it does not use. Only an explicit stopped verdict prints: an
 # unreadable, slow, or unrecognized status is left silent rather than guessed
 # at, because the daemon is shared and a wrong start command is operator noise.
+# A hit bound is exactly that unreadable case: fm_run_timed returns 124 and the
+# empty status matches no arm. The vendor CLI stays the single source of the
+# daemon's state; this file never reads ~/.no-mistakes/daemon.lock to guess it.
 # Both stopped spellings the tool emits are accepted (`daemon stopped` and
 # `daemon not running`, verified against no-mistakes v1.60.2 on 2026-09-11), so
 # a release that settles on either one keeps working.
+# The probe is measured in seconds, not milliseconds, so it runs in the deferred
+# phase rather than on the digest's blocking path (see the header).
 no_mistakes_daemon_detect() {
   local status
   command -v no-mistakes >/dev/null 2>&1 || return 0
   home_has_no_mistakes_work || return 0
-  status=$(timeout 20 no-mistakes daemon status 2>/dev/null) || status=""
+  status=$(fm_run_timed "$FM_NO_MISTAKES_DAEMON_TIMEOUT" no-mistakes daemon status 2>/dev/null) \
+    || status=""
   case "$status" in
     *"daemon stopped"*|*"daemon not running"*)
       echo "NO_MISTAKES_DAEMON: the shared no-mistakes daemon is stopped while this home has no-mistakes work recorded, so its pipeline runs cannot progress - start it with: cd '$FM_HOME' && no-mistakes daemon start"
@@ -1311,7 +1329,6 @@ detect_local_config() {
     echo "MISSING_MANUAL: cursor-agent (instructions: $(manual_install_url cursor-agent))"
   fi
   crew_dispatch_validate
-  no_mistakes_daemon_detect
   # Usage-limit resume arming: one BOOTSTRAP_INFO fact when the tokenless sweep
   # is armed, an actionable LIMIT_RESUME line when it is not or when this
   # primary cannot be reached by it; bin/fm-limit-resume.sh owns the wording.
@@ -1323,10 +1340,11 @@ detect_local_config() {
 }
 
 # The order below is the order the diagnostics have always printed in, so a
-# `skip` run is the same output with the network lines removed rather than a
+# `skip` run is the same output with the deferred lines removed rather than a
 # reshuffle. `gh auth status` sits between the two local blocks because that is
-# where it has always been.
-# Each network owner below is bracketed by an elapsed-time record, so a deferred
+# where it has always been, and the daemon probe follows the local block it was
+# split out of.
+# Each deferred owner below is bracketed by an elapsed-time record, so a deferred
 # stage that ran long can be attributed to the phase that spent the time.
 # fm-timing-lib.sh discards the record unless the caller asked for timings, and
 # every sweep is still called directly. Per-secondmate remote probes run
@@ -1342,6 +1360,11 @@ if network_phase; then
   fm_timing_record phase gh-auth "$__fm_timing_stamp"
 fi
 local_phase && detect_local_config
+if network_phase; then
+  __fm_timing_stamp=$(fm_timing_now_ms)
+  no_mistakes_daemon_detect
+  fm_timing_record phase no-mistakes-daemon "$__fm_timing_stamp"
+fi
 
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   # secondmate_sync consumes SECONDMATE_RESPAWNED_IDS from the liveness sweep, so
