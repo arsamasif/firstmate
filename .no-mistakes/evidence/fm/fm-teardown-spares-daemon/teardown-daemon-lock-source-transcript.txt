@@ -1,0 +1,27 @@
+############ CASE A: live lock record, command shape unrecognized ############
+--- ~/.no-mistakes/daemon.lock ---
+{"pid":2192594}
+--- processes at the task worktree cwd ---
+2192594 nm-daemon-v2 serve 300
+2192595 sleep 300
+--- $ bin/fm-teardown.sh task-x1 ---
+teardown: sparing the shared no-mistakes daemon for task-x1: 2192594
+teardown: reaping leaked worktree process(es) for task-x1: 2192595
+/tmp/evi-lock.MC8Evn/project: already current
+teardown task-x1 complete (window firstmate:fm-task-x1, worktree /tmp/evi-lock.MC8Evn/wt)
+Backlog: task-x1 just finished. Run tasks-axi done task-x1 --pr PR_URL, then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+--- after ---
+2192594  recorded daemon pid          ALIVE
+2192595  leaked crew process          REAPED
+
+############ CASE B: STALE lock record (pid recycled onto a leak) ############
+--- lock mtime vs process start ---
+lock written : 2026-09-10 13:37:00.000000000 -0400
+pid 2193259 started: Sat Sep 12 06:40:37 2026
+--- $ bin/fm-teardown.sh task-x1 ---
+teardown: reaping leaked worktree process(es) for task-x1: 2193259
+/tmp/evi-lock.kmRhpb/project: already current
+teardown task-x1 complete (window firstmate:fm-task-x1, worktree /tmp/evi-lock.kmRhpb/wt)
+Backlog: task-x1 just finished. Run tasks-axi done task-x1 --pr PR_URL, then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+--- after ---
+2193259  leak holding the recycled daemon pid     REAPED

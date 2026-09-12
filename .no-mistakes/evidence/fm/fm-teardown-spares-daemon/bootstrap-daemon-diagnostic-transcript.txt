@@ -1,0 +1,31 @@
+=========== 1. deferred stage, shared daemon stopped, home has no-mistakes work ===========
+--- $ no-mistakes daemon status   (what the vendor CLI reports) ---
+  ○ daemon stopped
+--- $ bin/fm-startup-network.sh run   then   report   (the digest's NETWORK CHECKS section) ---
+completed off the startup path in 0s: GitHub authentication and the shared no-mistakes daemon status.
+NO_MISTAKES_DAEMON: the shared no-mistakes daemon is stopped while this home has no-mistakes work recorded, so its pipeline runs cannot progress - start it with: cd '/tmp/evi-bootstrap.ZZZ5Oj/stopped/home' && no-mistakes daemon start
+These ran AFTER the sections above were composed, so re-read any record a line here names.
+TIMINGS - where the deferred network checks spent their time (ms):
+  phase       gh-auth                                    start=+53      elapsed=5
+  phase       no-mistakes-daemon                         start=+62      elapsed=24
+  stage       network-checks probe                       start=+1       elapsed=96
+  slowest: stage network-checks probe 96ms, phase no-mistakes-daemon 24ms, phase gh-auth 5ms
+--- recorded elapsed times for the deferred stage ---
+v1	phase	gh-auth	53	5	
+v1	phase	no-mistakes-daemon	62	24	
+v1	stage	network-checks	1	96	probe
+
+=========== 2. the digest's own blocking path (FM_BOOTSTRAP_NETWORK=skip) ===========
+--- $ bin/fm-bootstrap.sh   with the daemon still stopped: no daemon line, and no waiting for one ---
+(no output)
+blocking-path elapsed: 168 ms (the fake daemon status wedges for 30s when asked)
+
+=========== 3. silent cases from the deferred stage itself ===========
+healthy daemon                     mode=no-mistakes  status=● daemon running (pid 4242) -> silent
+home with no no-mistakes work      mode=direct-PR    status=○ daemon stopped           -> silent
+probe wedged past its bound        mode=no-mistakes  status=○ daemon stopped           -> silent
+unreadable status, non-zero exit   mode=no-mistakes  status=daemon state unknown         -> silent
+stopped verdict, non-zero exit     mode=no-mistakes  status=○ daemon stopped           -> DIAGNOSTIC PRINTED
+
+=========== 4. the same stopped daemon WITH no-mistakes work: one actionable line ===========
+NO_MISTAKES_DAEMON: the shared no-mistakes daemon is stopped while this home has no-mistakes work recorded, so its pipeline runs cannot progress - start it with: cd '/tmp/evi-bootstrap.ZZZ5Oj/stopped2/home' && no-mistakes daemon start

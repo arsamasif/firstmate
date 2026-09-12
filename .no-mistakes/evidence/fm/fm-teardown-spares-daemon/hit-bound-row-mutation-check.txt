@@ -1,0 +1,11 @@
+Mutation check: is the new hit-bound test row discriminating?
+Method: copy of branch head in /tmp/fm-target with bin/fm-bootstrap.sh:1304
+        ([ "$rc" -ne 124 ] || status="") replaced by a no-op, then the bootstrap suite re-run.
+
+=== $ bash tests/fm-bootstrap.test.sh   (guard removed) ===
+not ok - hit-bound-with-work: expected no daemon diagnostic, got: NO_MISTAKES_DAEMON: the shared no-mistakes daemon is stopped while this home has no-mistakes work recorded, so its pipeline runs cannot progress - start it with: cd '/tmp/fm-bootstrap-tests.OJZo9Y/nm-daemon-hit-bound-with-work/home' && no-mistakes daemon start
+EXIT=1
+
+=== $ bash tests/fm-bootstrap.test.sh   (guard present, branch head) ===
+ok - bootstrap reports a stopped no-mistakes daemon only from the deferred phase, only with no-mistakes work recorded, whatever exit status carried the verdict, and never on a hit bound
+EXIT=0

@@ -1,0 +1,40 @@
+Incident reproduction and fix, driven through the real bin/fm-teardown.sh.
+Scenario: a finished task's worktree is also the cwd of the SHARED no-mistakes daemon
+(a crewmate started it there after a reboot), with an ordinary leaked crew process beside it.
+
+################ BEFORE THE FIX (base commit 0d1a9c9) ################
+=== process table before teardown (pid / command / cwd) ===
+2189423  /tmp/evi-teardown.4OVHpm/fakebin/no-mistakes daemon run 300            cwd=/tmp/evi-teardown.4OVHpm/wt
+2189424  bash /tmp/evi-teardown.4OVHpm/fakebin/no-mistakes daemon log-sink 300  cwd=/tmp/evi-teardown.4OVHpm/wt
+2189425  sleep 300                                                              cwd=/tmp/evi-teardown.4OVHpm/wt
+
+=== $ bin/fm-teardown.sh task-x1   (operator transcript) ===
+teardown: reaping leaked worktree process(es) for task-x1: 2189423 2189424 2189425
+/tmp/evi-teardown.4OVHpm/project: already current
+teardown task-x1 complete (window firstmate:fm-task-x1, worktree /tmp/evi-teardown.4OVHpm/wt)
+Backlog: task-x1 just finished. Run tasks-axi done task-x1 --pr PR_URL, then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+(exit 0)
+
+=== process table after teardown ===
+2189423  no-mistakes daemon run       REAPED
+2189424  no-mistakes daemon log-sink  REAPED
+2189425  leaked crew process          REAPED
+
+################ AFTER THE FIX (branch head 511ba67) ################
+=== process table before teardown (pid / command / cwd) ===
+2187093  /tmp/evi-teardown.meCPJL/fakebin/no-mistakes daemon run 300            cwd=/tmp/evi-teardown.meCPJL/wt
+2187094  bash /tmp/evi-teardown.meCPJL/fakebin/no-mistakes daemon log-sink 300  cwd=/tmp/evi-teardown.meCPJL/wt
+2187095  sleep 300                                                              cwd=/tmp/evi-teardown.meCPJL/wt
+
+=== $ bin/fm-teardown.sh task-x1   (operator transcript) ===
+teardown: sparing the shared no-mistakes daemon for task-x1: 2187093 2187094
+teardown: reaping leaked worktree process(es) for task-x1: 2187095
+/tmp/evi-teardown.meCPJL/project: already current
+teardown task-x1 complete (window firstmate:fm-task-x1, worktree /tmp/evi-teardown.meCPJL/wt)
+Backlog: task-x1 just finished. Run tasks-axi done task-x1 --pr PR_URL, then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+(exit 0)
+
+=== process table after teardown ===
+2187093  no-mistakes daemon run       ALIVE
+2187094  no-mistakes daemon log-sink  ALIVE
+2187095  leaked crew process          REAPED

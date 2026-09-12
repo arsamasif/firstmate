@@ -1,0 +1,16 @@
+Generated worker brief rule 7, rendered by the real bin/fm-brief.sh (intent item 3).
+
+=== $ bin/fm-brief.sh task-x1 someproject --mode no-mistakes  ->  data/task-x1/brief.md ===
+7. Never start, stop, restart, or update the shared `no-mistakes` daemon - it is one instance serving
+   every lane/home, so restarting it kills other lanes' in-flight pipeline runs and starting your own
+   competes with it. Firstmate owns the daemon. On ANY no-mistakes
+   daemon error, including a daemon that is not running, append `blocked: {the daemon error}` and stop.
+
+=== $ bin/fm-brief.sh task-x2 someproject --scout  ->  data/task-x2/brief.md ===
+7. Never start, stop, restart, or update the shared `no-mistakes` daemon - it is one instance serving
+   every lane/home, so restarting it kills other lanes' in-flight pipeline runs and starting your own
+   competes with it. Firstmate owns the daemon. On ANY no-mistakes
+   daemon error, including a daemon that is not running, append `blocked: {the daemon error}` and stop.
+
+=== secondmate charter carries no daemon rule: grep -c daemon on its brief.md ===
+0
