@@ -83,10 +83,16 @@ if [ "${1:-}" = --version ]; then
   exit 0
 fi
 if [ "${1:-}" = daemon ] && [ "${2:-}" = status ]; then
+  # The verdict MUST be emitted before the wedge, never after it. A vendor that
+  # wedges without printing leaves the probe holding an empty status, which
+  # matches no arm whether or not bootstrap discards a hit bound - so ordering
+  # the sleep first would make the wedge row pass vacuously. Printing first is
+  # what makes it discriminating: the probe really is holding a stopped verdict
+  # at the moment the bound is hit.
+  printf '  %s\n' "${FM_FAKE_NM_DAEMON_STATUS:-● daemon running (pid 4242)}"
   if [ "${FM_FAKE_NM_DAEMON_HANG:-0}" = 1 ]; then
     sleep 30
   fi
-  printf '  %s\n' "${FM_FAKE_NM_DAEMON_STATUS:-● daemon running (pid 4242)}"
   exit "${FM_FAKE_NM_DAEMON_RC:-0}"
 fi
 exit 0
@@ -901,10 +907,11 @@ test_routine_bootstrap_contract_runs_under_system_bash() {
 # proves it no longer runs on the session-start digest's blocking path, and the
 # `only` rows prove it still runs somewhere.
 # Each row carries its OWN bound, because the rows want opposite things from it.
-# Only the hang row wants the bound hit, so it alone gets a bound short enough to
-# hit deterministically; every other row must COMPLETE, so it gets a bound no
-# loaded host can push it past. One shared value cannot serve both, and a row
-# that quietly hit the bound would be reported as a missing diagnostic.
+# Only the hang row wants the bound hit, so its bound sits far below the wedge it
+# will hit but still far above the time the fake needs to print its verdict
+# first; every other row must COMPLETE, so it gets a bound no loaded host can
+# push it past. One shared value cannot serve both, and a row that quietly hit
+# the bound would be reported as a missing diagnostic.
 test_stopped_no_mistakes_daemon_reports_only_with_no_mistakes_work() {
   local label mode status phase hang rc bound expect case_dir fakebin home out n=0
   while IFS='^' read -r label mode status phase hang rc bound expect; do
@@ -946,7 +953,7 @@ running-with-work^no-mistakes^● daemon running (pid 4242)^only^0^0^20^silent
 stopped-without-work^direct-PR^○ daemon stopped^only^0^0^20^silent
 stopped-on-the-blocking-path^no-mistakes^○ daemon stopped^skip^0^0^20^silent
 unrecognized-status-with-non-zero-exit^no-mistakes^daemon state unknown^only^0^1^20^silent
-hit-bound-with-work^no-mistakes^○ daemon stopped^only^1^0^1^silent
+hit-bound-with-work^no-mistakes^○ daemon stopped^only^1^0^5^silent
 ROWS
   [ "$n" -eq 8 ] || fail "expected 8 daemon-status rows, ran $n"
   pass "bootstrap reports a stopped no-mistakes daemon only from the deferred phase, only with no-mistakes work recorded, whatever exit status carried the verdict, and never on a hit bound"
