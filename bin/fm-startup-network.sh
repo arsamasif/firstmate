@@ -9,6 +9,10 @@
 # those calls is individually bounded, so one unreachable host could consume the
 # whole FM_SESSION_START_TIMEOUT budget and truncate the digest outright, turning
 # a slow network into a startup that never printed the work queue at all.
+# The stage is selected by COST rather than by medium, so a local probe that is
+# measured in seconds is deferred here too: the shared no-mistakes daemon status
+# probe shells out to the vendor CLI and takes seconds, which is the same
+# blocking-path problem an unreachable host creates.
 # This script runs exactly that work OFF the blocking path: the digest is
 # composed from local reads alone while these checks run concurrently in a
 # detached worker, and their result is reported back inline when it finishes in
@@ -84,9 +88,10 @@
 #                             wake.
 #   .startup-network.timings  per-step elapsed times for the last run, in
 #                             bin/fm-timing-lib.sh's tab-separated format: the
-#                             stage total, one record per network phase (gh auth,
-#                             secondmate liveness, secondmate convergence, handoff
-#                             delivery, fleet sync), one per secondmate for the
+#                             stage total, one record per deferred phase (gh auth,
+#                             no-mistakes daemon status, secondmate liveness,
+#                             secondmate convergence, handoff delivery, fleet
+#                             sync), one per secondmate for the
 #                             remote-touching steps (id and host), and one per
 #                             project clone. Published for a timed-out or failed
 #                             run too, where a partial record is the answer.
@@ -188,8 +193,8 @@ worker_alive() {
 # confirmed yet" is always answerable from the status record alone.
 phase_label() {  # <phases>
   case "$1" in
-    probe) printf 'GitHub authentication' ;;
-    probe,sweeps) printf 'GitHub authentication, dead-secondmate relaunch, secondmate convergence, pending handoff delivery, and project clone refresh with its drift reporting' ;;
+    probe) printf 'GitHub authentication and the shared no-mistakes daemon status' ;;
+    probe,sweeps) printf 'GitHub authentication, the shared no-mistakes daemon status, dead-secondmate relaunch, secondmate convergence, pending handoff delivery, and project clone refresh with its drift reporting' ;;
     *) printf 'the deferred network checks' ;;
   esac
 }

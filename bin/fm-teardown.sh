@@ -127,6 +127,16 @@
 #     roots are unique per task and never
 #     shared, so this can never reach another task's or the primary's
 #     processes. Idempotent: nothing left to find is a silent no-op.
+#     The one process under those roots that is never leaked task work is the
+#     SHARED no-mistakes daemon: one instance serves every lane and home, and a
+#     daemon started from inside a worktree inherits that cwd. Each process
+#     carrying the daemon's own command shape - including its `daemon log-sink`
+#     child - and the process recorded in the daemon lock file are excluded from
+#     both the per-pid reap and the process-group fallback, and each exclusion
+#     is printed rather than silent. The exclusion is per process rather than
+#     per subtree, so a leak descending from a daemon-parented pipeline step
+#     agent is still reaped. The functions beside no_mistakes_daemon_pids own
+#     the exact matching rules.
 #   Fix 3 - sweep abandoned remote job workers. A remote job worker started
 #     from a worktree's own bin/ outlives that worktree's removal without
 #     being reachable by Fix 2, because its working directory is wherever it
@@ -1590,6 +1600,142 @@ task_pid_list_contains() {  # <pid-list> <pid>
   printf '%s\n' "$1" | grep -Fxq "$2"
 }
 
+# The shared no-mistakes daemon is never leaked task work, whatever its cwd.
+# One daemon instance serves every lane and home, so a daemon started from
+# inside a task worktree - after a machine reboot, say - has that worktree as
+# its cwd and reads to the cwd scan above exactly like a leaked `go test`
+# binary. Reaping it SIGTERMs the daemon and fails every sibling lane's
+# in-flight pipeline run (observed 2026-09-10: `shutting down reason=terminated`
+# in the daemon log, with two lanes failing `step review failed: agent fix:
+# daemon shutting down` in the same second).
+# Two independent sources identify it, and either one alone is enough:
+#   - its own command shape, `<...>no-mistakes daemon run|log-sink`, matched at
+#     argv position 0 or 1 so a direct binary and an interpreted
+#     `bash /path/no-mistakes daemon run` both match, while the same words
+#     appearing deeper in some other process's arguments (an agent prompt
+#     quoting this rule, say) do not; and
+#   - the pid recorded in the daemon lock file, so a daemon whose command shape
+#     changes in a future release is still spared.
+# The rule is per process, NOT per subtree. A descendant is spared only when it
+# carries the daemon's own command shape, which the daemon's `daemon log-sink`
+# child does. Sparing a whole subtree would silently undo this reap: the daemon
+# is the parent of every no-mistakes pipeline step agent, so any leaked process
+# descending from one would be dropped from TASK_PIDS and teardown would name a
+# leak as the daemon it spared. The step agents themselves run with their cwd
+# inside ~/.no-mistakes/worktrees/<run>, never inside a crew task worktree, so
+# the cwd scan never reaches them and the narrower rule costs nothing.
+# Sparing is announced rather than silent: an operator reading teardown output
+# must be able to see WHY a process under the worktree survived.
+FM_NO_MISTAKES_HOME=${FM_NO_MISTAKES_HOME_OVERRIDE:-${HOME:-}/.no-mistakes}
+SPARED_DAEMON_ANNOUNCED=
+# Slack absorbing whole-second `ps` elapsed-time truncation when comparing the
+# lock file's mtime against the start time of the process it names.
+NO_MISTAKES_LOCK_CLOCK_SLACK_SECS=5
+
+# Epoch seconds at which <pid> started, or failure when that cannot be read.
+no_mistakes_process_start_epoch() {  # <pid>
+  local pid=$1 elapsed now started
+  if [ "$(uname)" = Darwin ]; then
+    started=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
+    started=$(fm_nm_trim "$started")
+    [ -n "$started" ] || return 1
+    date -j -f '%a %b %e %H:%M:%S %Y' "$started" +%s 2>/dev/null
+    return
+  fi
+  elapsed=$(LC_ALL=C ps -p "$pid" -o etimes= 2>/dev/null) || return 1
+  elapsed=$(fm_nm_trim "$elapsed")
+  case "$elapsed" in ''|*[!0-9]*) return 1 ;; esac
+  now=$(date +%s) || return 1
+  printf '%s\n' "$((now - elapsed))"
+}
+
+# Pid recorded in the daemon lock file, or nothing when it is absent, unusable,
+# or provably stale. A lock file cannot predate the process it names, so a
+# recorded pid whose process started AFTER the lock was written is a recycled
+# pid belonging to something else - rooting the spare set there would spare an
+# unrelated leaked process and print that teardown spared the daemon. The
+# cross-check is deliberately on start time rather than command shape: the lock
+# exists precisely so a future release's different command shape is still
+# spared, and matching on shape here would collapse the two sources into one.
+# Any uncertainty (no mtime, no start time, no such process) drops the pid.
+no_mistakes_daemon_lock_pid() {
+  local lock="$FM_NO_MISTAKES_HOME/daemon.lock" pid lock_mtime started
+  [ -f "$lock" ] && [ ! -L "$lock" ] || return 0
+  pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$lock" 2>/dev/null | head -n1) || pid=
+  case "$pid" in ''|*[!0-9]*|0) return 0 ;; esac
+  lock_mtime=$(fm_lock_path_mtime "$lock") || return 0
+  case "$lock_mtime" in ''|*[!0-9]*) return 0 ;; esac
+  started=$(no_mistakes_process_start_epoch "$pid") || return 0
+  case "$started" in ''|*[!0-9-]*) return 0 ;; esac
+  [ "$lock_mtime" -ge "$((started - NO_MISTAKES_LOCK_CLOCK_SLACK_SECS))" ] || return 0
+  printf '%s\n' "$pid"
+}
+
+# One `pid args` line per process. FM_PS_SNAPSHOT_OVERRIDE names a file holding
+# that same shape, so a test can drive a controlled process view rather than
+# having the host's own running daemon decide the outcome.
+no_mistakes_process_snapshot() {
+  if [ -n "${FM_PS_SNAPSHOT_OVERRIDE:-}" ]; then
+    [ -r "$FM_PS_SNAPSHOT_OVERRIDE" ] || return 1
+    cat "$FM_PS_SNAPSHOT_OVERRIDE"
+    return
+  fi
+  LC_ALL=C ps -eo pid=,args= 2>/dev/null
+}
+
+# Every pid the reap must spare, one per line; nothing when this machine runs no
+# daemon. One snapshot and one awk pass per call, and the answer is recomputed
+# rather than cached so a daemon that appears between reap passes is still
+# spared. The two sources are independent: a usable lock pid counts even when
+# the snapshot is unavailable.
+no_mistakes_daemon_pids() {
+  local snapshot lock_pid
+  snapshot=$(no_mistakes_process_snapshot) || snapshot=
+  lock_pid=$(no_mistakes_daemon_lock_pid)
+  {
+    if [ -n "$lock_pid" ]; then printf '%s\n' "$lock_pid"; fi
+    if [ -n "$snapshot" ]; then
+      printf '%s\n' "$snapshot" | LC_ALL=C awk '
+        function base(path) { sub(/.*\//, "", path); return path }
+        function shaped(i) {
+          return base($(i)) == "no-mistakes" && $(i + 1) == "daemon" \
+            && ($(i + 2) == "run" || $(i + 2) == "log-sink")
+        }
+        $1 ~ /^[0-9]+$/ && (shaped(2) || shaped(3)) { print $1 }
+      '
+    fi
+  } | sort -un
+}
+
+# Drop every spared pid from TASK_PIDS, naming each newly spared pid once.
+filter_spared_daemon_pids() {
+  local spared kept="" dropped="" pid
+  [ -n "$TASK_PIDS" ] || return 0
+  spared=$(no_mistakes_daemon_pids)
+  [ -n "$spared" ] || return 0
+  spared=$'\n'"$spared"$'\n'
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    case "$spared" in
+      *$'\n'"$pid"$'\n'*)
+        case $'\n'"$SPARED_DAEMON_ANNOUNCED" in
+          *$'\n'"$pid"$'\n'*) ;;
+          *)
+            dropped="$dropped $pid"
+            SPARED_DAEMON_ANNOUNCED="$SPARED_DAEMON_ANNOUNCED$pid"$'\n'
+            ;;
+        esac
+        ;;
+      *) kept="$kept$pid"$'\n' ;;
+    esac
+  done <<EOF
+$TASK_PIDS
+EOF
+  TASK_PIDS=$(printf '%s' "$kept")
+  [ -n "$dropped" ] || return 0
+  echo "teardown: sparing the shared no-mistakes daemon for $ID:$dropped" >&2
+}
+
 task_pids_under_roots() {  # <dir>...
   TASK_PIDS=
   TASK_PIDS_FAILED_DIR=
@@ -1604,6 +1750,27 @@ task_pids_under_roots() {  # <dir>...
 $dir_pids"
   done
   TASK_PIDS=$(printf '%s\n' "$pids" | grep -E '^[0-9]+$' | sort -un || true)
+  filter_spared_daemon_pids
+}
+
+# True when a process the reap must spare sits in <pgid>. The lsof-absent
+# fallback below signals a whole process group, so it needs the same exclusion
+# the per-pid reap has.
+pgid_contains_spared_daemon() {  # <pgid>
+  local pgid=$1 spared pid current
+  spared=$(no_mistakes_daemon_pids)
+  [ -n "$spared" ] || return 1
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    current=$(ps -o pgid= -p "$pid" 2>/dev/null) || continue
+    current=$(printf '%s' "$current" | tr -d '[:space:]')
+    if [ "$current" = "$pgid" ]; then
+      return 0
+    fi
+  done <<EOF
+$spared
+EOF
+  return 1
 }
 
 reap_task_backend_process_group() {  # <label>
@@ -1633,6 +1800,10 @@ reap_task_backend_process_group() {  # <label>
   own_pgid=$(printf '%s' "$own_pgid" | tr -d '[:space:]')
   if [ "$pgid" = "$own_pgid" ]; then
     echo "warning: lsof is unavailable; refusing to signal teardown's own process group for $ID" >&2
+    return 0
+  fi
+  if pgid_contains_spared_daemon "$pgid"; then
+    echo "teardown: sparing the shared no-mistakes daemon for $ID: process group $pgid" >&2
     return 0
   fi
   task_process_identity_matches "$leader" "$leader_start" || return 0

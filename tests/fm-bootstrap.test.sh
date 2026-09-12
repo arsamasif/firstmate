@@ -82,6 +82,19 @@ if [ "${1:-}" = --version ]; then
   printf '%s\n' "${FM_FAKE_NO_MISTAKES_VERSION:-no-mistakes version v1.46.0 (fake) 2026-06-27T00:02:18Z}"
   exit 0
 fi
+if [ "${1:-}" = daemon ] && [ "${2:-}" = status ]; then
+  # The verdict MUST be emitted before the wedge, never after it. A vendor that
+  # wedges without printing leaves the probe holding an empty status, which
+  # matches no arm whether or not bootstrap discards a hit bound - so ordering
+  # the sleep first would make the wedge row pass vacuously. Printing first is
+  # what makes it discriminating: the probe really is holding a stopped verdict
+  # at the moment the bound is hit.
+  printf '  %s\n' "${FM_FAKE_NM_DAEMON_STATUS:-● daemon running (pid 4242)}"
+  if [ "${FM_FAKE_NM_DAEMON_HANG:-0}" = 1 ]; then
+    sleep 30
+  fi
+  exit "${FM_FAKE_NM_DAEMON_RC:-0}"
+fi
 exit 0
 SH
   chmod +x "$fakebin/no-mistakes"
@@ -881,6 +894,71 @@ test_routine_bootstrap_contract_runs_under_system_bash() {
   pass "bootstrap routine contract runs under system /bin/bash"
 }
 
+# The no-mistakes daemon is SHARED by every lane and home, so firstmate owns its
+# lifecycle and bootstrap owns its absence: one actionable line when this home's
+# own no-mistakes work cannot progress. The three ways to be silent matter as
+# much as the line itself - a running daemon, a home whose recorded work never
+# uses the pipeline at all, and a probe that hit its bound before answering,
+# because a shared daemon plus a guessed verdict is operator noise.
+# A hit bound is the ONLY exit status that discards the verdict: the answer lives
+# in the vendor's status text, so a stopped daemon reported with a non-zero exit
+# is still read rather than silently dropped.
+# The probe costs seconds, so it belongs to the DEFERRED phase: the `skip` row
+# proves it no longer runs on the session-start digest's blocking path, and the
+# `only` rows prove it still runs somewhere.
+# Each row carries its OWN bound, because the rows want opposite things from it.
+# Only the hang row wants the bound hit, so its bound sits far below the wedge it
+# will hit but still far above the time the fake needs to print its verdict
+# first; every other row must COMPLETE, so it gets a bound no loaded host can
+# push it past. One shared value cannot serve both, and a row that quietly hit
+# the bound would be reported as a missing diagnostic.
+test_stopped_no_mistakes_daemon_reports_only_with_no_mistakes_work() {
+  local label mode status phase hang rc bound expect case_dir fakebin home out n=0
+  while IFS='^' read -r label mode status phase hang rc bound expect; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    case_dir="$TMP_ROOT/nm-daemon-$label"
+    home="$case_dir/home"
+    mkdir -p "$home/state" "$home/config"
+    printf '%s\n' manual > "$home/config/backlog-backend"
+    fakebin=$(make_fake_toolchain "$case_dir")
+    fm_write_meta "$home/state/task-a.meta" \
+      "window=firstmate:fm-task-a" \
+      "kind=ship" \
+      "mode=$mode"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_BACKEND=tmux FM_HOME="$home" \
+      FM_ROOT_OVERRIDE="$ROOT" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
+      FM_BOOTSTRAP_DETECT_ONLY=1 FM_BOOTSTRAP_NETWORK="$phase" \
+      FM_FAKE_NM_DAEMON_STATUS="$status" FM_FAKE_NM_DAEMON_HANG="$hang" \
+      FM_FAKE_NM_DAEMON_RC="$rc" FM_NO_MISTAKES_DAEMON_TIMEOUT="$bound" \
+      "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    case "$expect" in
+      line)
+        case "$out" in
+          *"NO_MISTAKES_DAEMON: "*"no-mistakes daemon start"*) ;;
+          *) fail "$label: expected a NO_MISTAKES_DAEMON line naming the start command, got: $out" ;;
+        esac
+        ;;
+      silent)
+        case "$out" in
+          *NO_MISTAKES_DAEMON*) fail "$label: expected no daemon diagnostic, got: $out" ;;
+        esac
+        ;;
+    esac
+  done <<'ROWS'
+stopped-with-work^no-mistakes^○ daemon stopped^only^0^0^20^line
+not-running-with-work^no-mistakes^○ daemon not running^only^0^0^20^line
+stopped-with-non-zero-exit^no-mistakes^○ daemon stopped^only^0^1^20^line
+running-with-work^no-mistakes^● daemon running (pid 4242)^only^0^0^20^silent
+stopped-without-work^direct-PR^○ daemon stopped^only^0^0^20^silent
+stopped-on-the-blocking-path^no-mistakes^○ daemon stopped^skip^0^0^20^silent
+unrecognized-status-with-non-zero-exit^no-mistakes^daemon state unknown^only^0^1^20^silent
+hit-bound-with-work^no-mistakes^○ daemon stopped^only^1^0^5^silent
+ROWS
+  [ "$n" -eq 8 ] || fail "expected 8 daemon-status rows, ran $n"
+  pass "bootstrap reports a stopped no-mistakes daemon only from the deferred phase, only with no-mistakes work recorded, whatever exit status carried the verdict, and never on a hit bound"
+}
+
 # FM_BOOTSTRAP_NETWORK splits one bootstrap run into its local and network
 # halves so a session start can compose its digest from the local half alone and
 # run the network half concurrently. The property that has to hold is that the
@@ -1002,6 +1080,7 @@ test_network_phases_record_per_step_elapsed_times() {
 
   assert_present "$log" "the network phase recorded no elapsed times at all"
   assert_timing_record "$log" phase gh-auth '' "the GitHub auth probe was not timed"
+  assert_timing_record "$log" phase no-mistakes-daemon '' "the no-mistakes daemon status probe was not timed"
   assert_timing_record "$log" phase secondmate-liveness '' "the dead-secondmate relaunch sweep was not timed"
   assert_timing_record "$log" phase secondmate-sync '' "the secondmate convergence sweep was not timed"
   assert_timing_record "$log" phase handoff-delivery '' "the pending handoff sweep was not timed"
@@ -1176,3 +1255,4 @@ test_network_phases_record_per_step_elapsed_times
 test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
+test_stopped_no_mistakes_daemon_reports_only_with_no_mistakes_work
